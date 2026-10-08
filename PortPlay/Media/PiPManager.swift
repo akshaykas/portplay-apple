@@ -1,8 +1,9 @@
 import AVFoundation
 import AVKit
 
-/// Picture in picture. Frames only flow into the floating window's layer while
-/// it is starting or showing, so it costs nothing the rest of the time.
+/// Picture in picture. While a dongle is connected, every frame also goes to the
+/// floating window's layer, so picture in picture is ready the moment it's asked for.
+/// That layer sits underneath the main picture, so it adds no visible work.
 final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictureInPictureSampleBufferPlaybackDelegate, @unchecked Sendable {
     let displayLayer = AVSampleBufferDisplayLayer()
 
@@ -18,12 +19,23 @@ final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictur
 
     private let lock = NSLock()
     private var formatDescription: CMVideoFormatDescription?
+    private var announcedFrames = false
 
     init(hub: FrameHub) {
         self.hub = hub
         super.init()
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        // Frames carry host clock timestamps, so play them on the host clock.
+        // Without a running timebase the floating window never becomes available.
+        var timebase: CMTimebase?
+        CMTimebaseCreateWithSourceClock(allocator: kCFAllocatorDefault, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
+        if let timebase {
+            CMTimebaseSetTime(timebase, time: CMClockGetTime(CMClockGetHostTimeClock()))
+            CMTimebaseSetRate(timebase, rate: 1)
+            displayLayer.controlTimebase = timebase
+        }
 
         guard AVPictureInPictureController.isPictureInPictureSupported() else { return }
         let source = AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer: displayLayer, playbackDelegate: self)
@@ -45,6 +57,22 @@ final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictur
 
     // MARK: Control, from the main thread
 
+    /// Starts sending frames to the floating window's layer. Called when a dongle connects.
+    func beginFeeding() {
+        hub?.setPiP(self)
+    }
+
+    /// Stops sending frames and closes the floating window. Called when the dongle goes away.
+    func stop() {
+        pendingStart = false
+        if controller?.isPictureInPictureActive == true {
+            controller?.stopPictureInPicture()
+        }
+        hub?.setPiP(nil)
+        lock.withLock { announcedFrames = false }
+        displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+    }
+
     func toggle() {
         guard let controller else {
             onFailure?()
@@ -64,36 +92,25 @@ final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictur
         try? audioSession.setActive(true)
         #endif
 
-        hub?.setPiP(self)
-        pendingStart = true
-        startIfPending()
+        if controller.isPictureInPicturePossible {
+            controller.startPictureInPicture()
+            return
+        }
 
-        // Give up if it never becomes possible
+        // Not ready yet, usually right after connecting. Start as soon as it is.
+        pendingStart = true
+        controller.invalidatePlaybackState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self, self.pendingStart else { return }
             self.pendingStart = false
-            self.stopFeeding()
             self.onFailure?()
         }
-    }
-
-    func stop() {
-        pendingStart = false
-        if controller?.isPictureInPictureActive == true {
-            controller?.stopPictureInPicture()
-        }
-        stopFeeding()
     }
 
     private func startIfPending() {
         guard pendingStart, let controller, controller.isPictureInPicturePossible else { return }
         pendingStart = false
         controller.startPictureInPicture()
-    }
-
-    private func stopFeeding() {
-        hub?.setPiP(nil)
-        displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 
     // MARK: Frames, from the capture queue
@@ -136,6 +153,17 @@ final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictur
             renderer.flush()
         }
         renderer.enqueue(sample)
+
+        // The first frame makes picture in picture possible, so let the controller know
+        let firstFrame = lock.withLock { () -> Bool in
+            defer { announcedFrames = true }
+            return !announcedFrames
+        }
+        if firstFrame {
+            DispatchQueue.main.async { [weak self] in
+                self?.controller?.invalidatePlaybackState()
+            }
+        }
     }
 
     // MARK: AVPictureInPictureControllerDelegate
@@ -146,7 +174,6 @@ final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictur
 
     func pictureInPictureControllerDidStopPictureInPicture(_ controller: AVPictureInPictureController) {
         DispatchQueue.main.async {
-            self.stopFeeding()
             self.onActiveChange?(false)
         }
     }
@@ -154,7 +181,6 @@ final class PiPManager: NSObject, AVPictureInPictureControllerDelegate, AVPictur
     func pictureInPictureController(_ controller: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
         DispatchQueue.main.async {
             self.pendingStart = false
-            self.stopFeeding()
             self.onFailure?()
         }
     }

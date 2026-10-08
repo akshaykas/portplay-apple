@@ -351,6 +351,7 @@ final class AppModel: ObservableObject {
         }
 
         screen = .running
+        pip.beginFeeding()
         startAudio(for: device)
         checkCapabilities(wanted: wanted)
         startReplayIfWanted()
@@ -914,11 +915,7 @@ final class AppModel: ObservableObject {
     // MARK: Picture in picture and full screen
 
     func togglePiP() {
-        if pipActive {
-            pip.stop()
-            return
-        }
-        guard needsStream() else { return }
+        guard pipActive || needsStream() else { return }
         pip.toggle()
     }
 
