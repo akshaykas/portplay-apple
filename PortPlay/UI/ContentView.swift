@@ -9,18 +9,28 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
 
             if let renderer = model.renderer {
-                VideoSurface(renderer: renderer, pip: model.pip)
+                VideoSurface(session: model.capture.session, renderer: renderer, pip: model.pip)
                     .ignoresSafeArea()
             }
 
-            if model.screen != .running {
-                StatusOverlay(screen: model.screen)
-                    .transition(.opacity)
-            }
+            // The picture itself. Taps and double clicks here never delay the buttons,
+            // since the controls sit on top as separate views.
+            stageGestures
 
-            if model.noSignal && model.isRunning {
-                NoSignalCard()
+            ZStack {
+                if model.screen != .running {
+                    StatusOverlay(screen: model.screen)
+                        .transition(.opacity)
+                }
             }
+            .animation(.easeInOut(duration: 0.3), value: model.screen)
+
+            ZStack {
+                if model.noSignal && model.isRunning {
+                    NoSignalCard()
+                }
+            }
+            .animation(.easeInOut(duration: 0.6), value: model.noSignal)
 
             // Screenshot flash
             Color.white
@@ -31,7 +41,7 @@ struct ContentView: View {
             // Recording time and troubleshooting tips, top left
             VStack(alignment: .leading, spacing: 12) {
                 if model.isRecording {
-                    RecordingIndicator(elapsed: model.recordingElapsed)
+                    RecordingIndicator(live: model.live)
                 }
                 if let tip = model.tip {
                     TipCard(tip: tip)
@@ -40,12 +50,11 @@ struct ContentView: View {
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            // Stats, top right
+            // Stats, a small box in the top right like the Windows version
             if model.prefs.stats {
-                HUDView(values: model.hud)
+                HUDView(live: model.live)
                     .padding(14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .transition(.opacity)
             }
 
             // Toasts above the control bar
@@ -64,36 +73,38 @@ struct ContentView: View {
                 SettingsPanel()
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.move(edge: .trailing))
             }
 
             KeyboardShortcuts()
         }
-        .contentShape(Rectangle())
         #if os(macOS)
-        .onTapGesture(count: 2) { model.toggleFullscreen() }
-        .onTapGesture { model.wake() }
         .onContinuousHover { phase in
             if case .active = phase { model.wake() }
         }
         .frame(minWidth: 480, minHeight: 270)
         #else
-        .onTapGesture { model.tapStage() }
         .statusBarHidden()
         .persistentSystemOverlays(model.isRunning ? .hidden : .automatic)
         #endif
         .foregroundStyle(Theme.text)
         .preferredColorScheme(.dark)
-        .animation(.easeInOut(duration: 0.3), value: model.controlsVisible)
-        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: model.settingsOpen)
-        .animation(.easeInOut(duration: 0.25), value: model.tip)
-        .animation(.easeInOut(duration: 0.4), value: model.screen)
-        .animation(.easeInOut(duration: 0.6), value: model.noSignal)
         .onChange(of: model.flashToken) { _, _ in
             flash = 0.55
             withAnimation(.easeOut(duration: 0.45)) { flash = 0 }
         }
         .task { await model.launch() }
+    }
+
+    private var stageGestures: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .ignoresSafeArea()
+            #if os(macOS)
+            .onTapGesture(count: 2) { model.toggleFullscreen() }
+            #else
+            .onTapGesture { model.tapStage() }
+            #endif
     }
 }
 
@@ -121,10 +132,8 @@ struct KeyboardShortcuts: View {
             }
             .disabled(model.isTypingName)
 
-            Button("") {
-                if model.settingsOpen { model.settingsOpen = false }
-            }
-            .keyboardShortcut(.escape, modifiers: [])
+            Button("") { model.setSettings(false) }
+                .keyboardShortcut(.escape, modifiers: [])
         }
         .opacity(0)
         .frame(width: 0, height: 0)

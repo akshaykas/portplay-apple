@@ -24,9 +24,6 @@ struct SettingsPanel: View {
         }
         .frame(maxWidth: 360, maxHeight: .infinity)
         .panel(solid: true)
-        .contentShape(Rectangle())
-        // Taps inside the panel stay inside the panel
-        .onTapGesture { nameFocused = false }
         .onHover { model.pointerOnControls = $0 }
         .onChange(of: nameFocused) { _, focused in
             model.isTypingName = focused
@@ -40,7 +37,7 @@ struct SettingsPanel: View {
                 .font(.system(size: 18, weight: .bold))
             Spacer()
             Button {
-                model.settingsOpen = false
+                model.setSettings(false)
             } label: {
                 Image(systemName: "xmark")
             }

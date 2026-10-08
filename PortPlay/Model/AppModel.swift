@@ -1,4 +1,5 @@
 import AVFoundation
+import QuartzCore
 import SwiftUI
 
 #if os(iOS)
@@ -32,6 +33,14 @@ struct HUDValues: Equatable {
     var signal = "--"
     var scale = "--"
     var mode = "--"
+}
+
+/// Values that change several times a second. Kept apart from AppModel so updating
+/// them only redraws the stats box and recording timer, not the whole interface.
+@MainActor
+final class LiveStats: ObservableObject {
+    @Published var hud = HUDValues()
+    @Published var recordingElapsed: TimeInterval = 0
 }
 
 /// Everything the app does, in one place. Mirrors renderer.js in the Windows version.
@@ -69,21 +78,23 @@ final class AppModel: ObservableObject {
     @Published private(set) var gameAudioRunning = false
 
     @Published private(set) var isRecording = false
-    @Published private(set) var recordingElapsed: TimeInterval = 0
     @Published private(set) var replayArmed = false
     @Published private(set) var pipActive = false
     @Published private(set) var flashToken = 0
 
-    @Published var settingsOpen = false {
-        didSet { wake() }
-    }
+    @Published private(set) var settingsOpen = false
     @Published private(set) var controlsVisible = true
-    @Published private(set) var hud = HUDValues()
     @Published private(set) var toasts: [Toast] = []
     @Published private(set) var tip: Tip?
     @Published private(set) var controllerStatus = ""
-    @Published var pointerOnControls = false
     @Published var isTypingName = false
+
+    /// Fast-changing numbers, observed only by the views that show them.
+    let live = LiveStats()
+    /// Not published: hovering the controls shouldn't redraw anything.
+    var pointerOnControls = false {
+        didSet { wake() }
+    }
 
     // MARK: Engines
 
@@ -108,8 +119,8 @@ final class AppModel: ObservableObject {
     private var startToken: UUID?
     private var deviceChangeTask: Task<Void, Never>?
     private var tickTimer: Timer?
-    private var idleTask: Task<Void, Never>?
     private var tickCount = 0
+    private var lastActivity = CACurrentMediaTime()
 
     // Signal monitor
     private var darkSeconds = 0
@@ -704,7 +715,7 @@ final class AppModel: ObservableObject {
         if replay != nil { parts.append("replay on") }
         values.mode = parts.joined(separator: ", ")
 
-        if values != hud { hud = values }
+        if values != live.hud { live.hud = values }
     }
 
     // MARK: Watching the signal
@@ -806,7 +817,7 @@ final class AppModel: ObservableObject {
             let recorder = try ClipRecorder(url: CaptureSaver.temporaryVideoURL(), mode: mode, audioFormat: audio.format)
             self.recorder = recorder
             hub.setRecorder(recorder)
-            recordingElapsed = 0
+            live.recordingElapsed = 0
             isRecording = true
         } catch {
             toast("Couldn't start recording: \(error.localizedDescription)")
@@ -921,7 +932,13 @@ final class AppModel: ObservableObject {
     // MARK: Settings panel
 
     func toggleSettings() {
-        settingsOpen.toggle()
+        setSettings(!settingsOpen)
+    }
+
+    func setSettings(_ open: Bool) {
+        guard open != settingsOpen else { return }
+        withAnimation(.easeOut(duration: 0.25)) { settingsOpen = open }
+        wake()
     }
 
     // MARK: Controller
@@ -941,30 +958,29 @@ final class AppModel: ObservableObject {
 
     // MARK: Controls hiding
 
-    /// Shows the controls, then hides them after a few seconds without activity,
-    /// unless settings are open or the pointer is on the controls.
+    /// Shows the controls. They hide again after a few seconds without activity,
+    /// unless settings are open or the pointer is on them. Cheap enough to call on
+    /// every mouse move.
     func wake() {
-        if !controlsVisible { controlsVisible = true }
-        idleTask?.cancel()
-        idleTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(Self.isMac ? 2.5 : 4))
-            guard !Task.isCancelled else { return }
-            if self.settingsOpen || self.pointerOnControls || !self.isRunning {
-                self.wake()
-                return
-            }
-            self.controlsVisible = false
-            #if os(macOS)
-            NSCursor.setHiddenUntilMouseMoves(true)
-            #endif
+        lastActivity = CACurrentMediaTime()
+        if !controlsVisible {
+            withAnimation(.easeOut(duration: 0.2)) { controlsVisible = true }
         }
+    }
+
+    private func hideControlsIfIdle() {
+        guard controlsVisible, isRunning, !settingsOpen, !pointerOnControls else { return }
+        guard CACurrentMediaTime() - lastActivity > (Self.isMac ? 2.5 : 4) else { return }
+        withAnimation(.easeIn(duration: 0.3)) { controlsVisible = false }
+        #if os(macOS)
+        NSCursor.setHiddenUntilMouseMoves(true)
+        #endif
     }
 
     /// iPad: tap the picture to show or hide the controls.
     func tapStage() {
         if controlsVisible && isRunning && !settingsOpen {
-            idleTask?.cancel()
-            controlsVisible = false
+            withAnimation(.easeIn(duration: 0.25)) { controlsVisible = false }
         } else {
             wake()
         }
@@ -992,7 +1008,7 @@ final class AppModel: ObservableObject {
     private func showTip(_ id: String, _ title: String, _ text: String) {
         guard !dismissedTips.contains(id), !shownTips.contains(id), tip == nil else { return }
         shownTips.insert(id)
-        tip = Tip(id: id, title: title, text: text)
+        withAnimation(.easeOut(duration: 0.25)) { tip = Tip(id: id, title: title, text: text) }
     }
 
     func closeTip(forever: Bool) {
@@ -1000,7 +1016,7 @@ final class AppModel: ObservableObject {
             dismissedTips.insert(tip.id)
             store.dismissedTips = dismissedTips
         }
-        tip = nil
+        withAnimation(.easeIn(duration: 0.2)) { tip = nil }
     }
 
     // MARK: Housekeeping
@@ -1019,8 +1035,12 @@ final class AppModel: ObservableObject {
     private func tick() {
         tickCount += 1
         if prefs.stats { updateHUD() }
-        if let recorder, isRecording { recordingElapsed = recorder.elapsed }
+        if let recorder, isRecording {
+            let elapsed = recorder.elapsed.rounded(.down)
+            if live.recordingElapsed != elapsed { live.recordingElapsed = elapsed }
+        }
         if tickCount % 4 == 0 { checkSignal() }
+        hideControlsIfIdle()
     }
 
     private func observeNotifications() {

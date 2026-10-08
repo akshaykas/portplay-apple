@@ -37,11 +37,17 @@ struct PanelBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
+                // The shadow belongs to the plain shape behind the content, which is far
+                // cheaper to draw than a shadow of everything inside the panel
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(solid ? AnyShapeStyle(Theme.panelSolid) : AnyShapeStyle(.ultraThinMaterial))
+                    .fill(Theme.panelSolid)
+                    .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
                     .overlay {
                         if !solid {
-                            RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Theme.panel)
+                            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                .fill(Theme.panel)
                         }
                     }
             }
@@ -49,7 +55,6 @@ struct PanelBackground: ViewModifier {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .strokeBorder(Theme.border, lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
     }
 }
 

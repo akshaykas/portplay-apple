@@ -251,10 +251,11 @@ struct NoSignalCard: View {
 // MARK: - Stats
 
 struct HUDView: View {
-    let values: HUDValues
+    @ObservedObject var live: LiveStats
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let values = live.hud
+        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 0) {
             row("Display delay", values.latency, color: color(for: values.latencyGrade))
             row("Frame rate", values.fps)
             row("Dropped frames", values.dropped)
@@ -268,18 +269,20 @@ struct HUDView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .frame(minWidth: 220)
+        .fixedSize()
         .panel(radius: 12)
         .allowsHitTesting(false)
-        .help("Display delay is the time from when this device receives a frame to when it is on screen. It does not include the dongle's own delay.")
     }
 
     private func row(_ label: String, _ value: String, color: Color = Theme.text) -> some View {
-        HStack(spacing: 18) {
-            Text(label).foregroundStyle(Theme.muted)
-            Spacer(minLength: 0)
-            Text(value).foregroundStyle(color)
+        GridRow {
+            Text(label)
+                .foregroundStyle(Theme.muted)
+                .frame(height: 21)
+            Text(value)
+                .foregroundStyle(color)
+                .gridColumnAlignment(.trailing)
         }
-        .frame(height: 21)
     }
 
     private func color(for grade: HUDValues.Grade) -> Color {
@@ -295,7 +298,7 @@ struct HUDView: View {
 // MARK: - Recording indicator
 
 struct RecordingIndicator: View {
-    let elapsed: TimeInterval
+    @ObservedObject var live: LiveStats
 
     var body: some View {
         HStack(spacing: 8) {
@@ -308,7 +311,7 @@ struct RecordingIndicator: View {
                     .animation(.easeInOut(duration: 0.5), value: on)
             }
             .frame(width: 9, height: 9)
-            Text(Self.format(elapsed))
+            Text(Self.format(live.recordingElapsed))
                 .font(.system(size: 14, weight: .bold))
                 .monospacedDigit()
         }
@@ -354,7 +357,11 @@ struct TipCard: View {
         .frame(maxWidth: 330, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.panelSolid))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.warn.opacity(0.35), lineWidth: 1))
-        .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Theme.panelSolid)
+                .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
+        )
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 }
@@ -383,7 +390,11 @@ struct ToastStack: View {
                 .padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.panelSolid))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.borderStrong, lineWidth: 1))
-                .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Theme.panelSolid)
+                        .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
+                )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }

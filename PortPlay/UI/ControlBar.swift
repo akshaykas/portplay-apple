@@ -32,9 +32,6 @@ struct ControlBar: View {
         }
         .padding(7)
         .panel()
-        .contentShape(Rectangle())
-        // Taps on the bar itself shouldn't hide it
-        .onTapGesture {}
         .onHover { model.pointerOnControls = $0 }
     }
 
@@ -66,7 +63,7 @@ struct ControlBar: View {
             }
             .pickerStyle(.inline)
             Divider()
-            Button("Manage profiles") { model.settingsOpen = true }
+            Button("Manage profiles") { model.setSettings(true) }
         } label: {
             HStack(spacing: 8) {
                 Text(model.activeProfileName)

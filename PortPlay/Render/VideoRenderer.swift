@@ -2,10 +2,23 @@ import CoreVideo
 import Metal
 import QuartzCore
 
-/// Draws each frame with Metal the moment it arrives, applying the scaling
-/// mode and retro filter, and measures how long frames take to reach the screen.
+/// Decides how each frame reaches the screen, and measures how long that takes.
+///
+/// Like the Windows version, the clean picture goes straight to the screen through
+/// the system's own camera layer, which is the fastest path there is. Metal only
+/// draws the picture when it has to: for the retro filters and pixel perfect scaling.
 final class VideoRenderer: @unchecked Sendable {
+    enum Path: Equatable {
+        /// AVCaptureVideoPreviewLayer shows the picture
+        case direct
+        /// This renderer draws every frame
+        case metal
+    }
+
     let layer = CAMetalLayer()
+
+    /// Called on the main thread when the path or scaling changes, so the view can lay out its layers.
+    var onLayoutChange: (() -> Void)?
 
     private let device: MTLDevice
     private let queue: MTLCommandQueue
@@ -24,6 +37,7 @@ final class VideoRenderer: @unchecked Sendable {
     private var currentScaleText = ""
     private var syncedToDisplay = true
     private var displayInterval = 1.0 / 60
+    private var currentPath = Path.direct
 
     /// Matches FilterUniforms in ShaderSource.
     private struct Uniforms {
@@ -69,25 +83,53 @@ final class VideoRenderer: @unchecked Sendable {
         layer.isOpaque = true
         layer.backgroundColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
         layer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
-        layer.maximumDrawableCount = 3
+        // Two drawables keeps at most one frame waiting for the screen
+        layer.maximumDrawableCount = 2
         layer.allowsNextDrawableTimeout = true
+        layer.isHidden = true
+    }
+
+    var path: Path {
+        lock.withLock { currentPath }
+    }
+
+    var scalingMode: ScaleMode {
+        lock.withLock { scaling }
     }
 
     // MARK: Settings, from the main thread
 
     func configure(scaling: ScaleMode, filter: RetroFilter, lowLatency: Bool) {
+        let activeFilter = lowLatency ? RetroFilter.off : filter
+        let newPath: Path = activeFilter == .off && scaling != .integer ? .direct : .metal
         lock.withLock {
             self.scaling = scaling
-            self.filter = lowLatency ? .off : filter
+            self.filter = activeFilter
+            self.currentPath = newPath
             #if os(macOS)
             self.syncedToDisplay = !lowLatency
             #endif
+            if newPath == .direct {
+                currentScaleText = Self.directScaleText(scaling)
+            }
         }
         #if os(macOS)
         // Draw as soon as a frame is ready instead of waiting for the next screen refresh
         layer.displaySyncEnabled = !lowLatency
         #endif
-        redraw()
+        onLayoutChange?()
+        if newPath == .metal {
+            redraw()
+        }
+    }
+
+    private static func directScaleText(_ mode: ScaleMode) -> String {
+        switch mode {
+        case .fit: return "Fit"
+        case .stretch: return "Stretch"
+        case .aspect43: return "4:3"
+        case .integer: return "Pixel"
+        }
     }
 
     func updateSize(_ size: CGSize, pixelsPerPoint scale: CGFloat, refreshRate: Int) {
@@ -105,7 +147,15 @@ final class VideoRenderer: @unchecked Sendable {
 
     /// Called on the capture queue for every new frame.
     func render(_ pixelBuffer: CVPixelBuffer, captureTime: CFTimeInterval) {
-        lock.withLock { lastBuffer = pixelBuffer }
+        let (path, refreshWait) = lock.withLock { () -> (Path, Double) in
+            lastBuffer = pixelBuffer
+            return (currentPath, displayInterval)
+        }
+        if path == .direct {
+            // The camera layer shows this frame at the next screen refresh
+            recordLatency(CACurrentMediaTime() - captureTime + refreshWait)
+            return
+        }
         draw(pixelBuffer, captureTime: captureTime)
     }
 
@@ -113,7 +163,9 @@ final class VideoRenderer: @unchecked Sendable {
     func redraw() {
         redrawQueue.async { [weak self] in
             guard let self else { return }
-            self.draw(self.lock.withLock { self.lastBuffer }, captureTime: nil)
+            let (path, buffer) = self.lock.withLock { (self.currentPath, self.lastBuffer) }
+            guard path == .metal else { return }
+            self.draw(buffer, captureTime: nil)
         }
     }
 
@@ -122,7 +174,7 @@ final class VideoRenderer: @unchecked Sendable {
         lock.withLock {
             lastBuffer = nil
             latencies.removeAll()
-            currentScaleText = ""
+            if currentPath == .metal { currentScaleText = "" }
         }
         redraw()
     }
