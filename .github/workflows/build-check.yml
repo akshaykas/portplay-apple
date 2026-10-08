@@ -1,0 +1,47 @@
+# Compiles both apps on every push without signing or uploading.
+# Use this to catch Swift errors quickly from Windows.
+name: Build check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scheme: PortPlay
+            destination: generic/platform=iOS Simulator
+          - scheme: PortPlayMac
+            destination: generic/platform=macOS
+    env:
+      BUNDLE_ID: com.example.portplay
+      TEAM_ID: ""
+      BUILD_NUMBER: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build ${{ matrix.scheme }}
+        run: |
+          xcodebuild build \
+            -project PortPlay.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -destination "${{ matrix.destination }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER=""

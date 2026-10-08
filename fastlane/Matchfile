@@ -1,0 +1,5 @@
+# Signing certificates and profiles live encrypted in a private GitHub repo.
+# MATCH_GIT_URL, MATCH_PASSWORD and MATCH_GIT_BASIC_AUTHORIZATION come from GitHub secrets.
+git_url(ENV["MATCH_GIT_URL"])
+storage_mode("git")
+type("appstore")

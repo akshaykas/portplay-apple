@@ -1,0 +1,9 @@
+PortPlay.xcodeproj/
+Config/
+build/
+*.ipa
+*.pkg
+*.dSYM.zip
+fastlane/report.xml
+fastlane/README.md
+.DS_Store
