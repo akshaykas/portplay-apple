@@ -22,6 +22,8 @@ final class VideoRenderer: @unchecked Sendable {
     private var lastBuffer: CVPixelBuffer?
     private var latencies: [Double] = []
     private var currentScaleText = ""
+    private var syncedToDisplay = true
+    private var displayInterval = 1.0 / 60
 
     /// Matches FilterUniforms in ShaderSource.
     private struct Uniforms {
@@ -77,6 +79,9 @@ final class VideoRenderer: @unchecked Sendable {
         lock.withLock {
             self.scaling = scaling
             self.filter = lowLatency ? .off : filter
+            #if os(macOS)
+            self.syncedToDisplay = !lowLatency
+            #endif
         }
         #if os(macOS)
         // Draw as soon as a frame is ready instead of waiting for the next screen refresh
@@ -85,9 +90,12 @@ final class VideoRenderer: @unchecked Sendable {
         redraw()
     }
 
-    func updateSize(_ size: CGSize, pixelsPerPoint scale: CGFloat) {
+    func updateSize(_ size: CGSize, pixelsPerPoint scale: CGFloat, refreshRate: Int) {
         guard size.width > 0, size.height > 0 else { return }
-        lock.withLock { pixelsPerPoint = scale }
+        lock.withLock {
+            pixelsPerPoint = scale
+            displayInterval = 1 / Double(max(refreshRate, 30))
+        }
         layer.contentsScale = scale
         layer.drawableSize = CGSize(width: size.width * scale, height: size.height * scale)
         redraw()
@@ -169,15 +177,16 @@ final class VideoRenderer: @unchecked Sendable {
             }
             encoder.endEncoding()
 
-            if let captureTime {
-                drawable.addPresentedHandler { [weak self] presented in
-                    let shown = presented.presentedTime
-                    guard shown > 0 else { return }
-                    self?.recordLatency(shown - captureTime)
+            // When the GPU finishes, the frame is ready. It reaches the screen at the
+            // next refresh, or right away on Mac in low latency mode.
+            let refreshWait = lock.withLock { syncedToDisplay ? displayInterval : 0 }
+            commandBuffer.addCompletedHandler { [weak self] _ in
+                // Keep the texture alive until the GPU is done with it
+                _ = cvTexture
+                if let captureTime {
+                    self?.recordLatency(CACurrentMediaTime() - captureTime + refreshWait)
                 }
             }
-            // Keep the texture alive until the GPU is done with it
-            commandBuffer.addCompletedHandler { _ in _ = cvTexture }
             commandBuffer.present(drawable)
             commandBuffer.commit()
         }

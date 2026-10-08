@@ -44,7 +44,11 @@ final class VideoSurfaceView: UIView {
         pip.displayLayer.frame = bounds
         renderer.layer.frame = bounds
         CATransaction.commit()
-        renderer.updateSize(bounds.size, pixelsPerPoint: window?.screen.scale ?? traitCollection.displayScale)
+        renderer.updateSize(
+            bounds.size,
+            pixelsPerPoint: window?.screen.scale ?? traitCollection.displayScale,
+            refreshRate: window?.screen.maximumFramesPerSecond ?? 60
+        )
     }
 }
 
@@ -104,7 +108,11 @@ final class VideoSurfaceView: NSView {
         pip.displayLayer.frame = bounds
         renderer.layer.frame = bounds
         CATransaction.commit()
-        renderer.updateSize(bounds.size, pixelsPerPoint: window?.backingScaleFactor ?? 2)
+        renderer.updateSize(
+            bounds.size,
+            pixelsPerPoint: window?.backingScaleFactor ?? 2,
+            refreshRate: window?.screen?.maximumFramesPerSecond ?? 60
+        )
     }
 }
 #endif
