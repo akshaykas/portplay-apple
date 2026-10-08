@@ -4,13 +4,41 @@ A native SwiftUI version of PortPlay for iPads with a USB-C port (iPadOS 17 or l
 
 Both apps share one codebase and one bundle ID, so they appear as a single App Store listing. Buying it once gets you both.
 
+## Features
+
+The same features as the Windows version:
+
+* Profiles that remember resolution, frame rate, scaling, filter and audio sync, and come back automatically for each dongle
+* Scaling modes: Fit, Stretch, Pixel (pixel perfect) and 4:3
+* Retro filters: Scanlines and CRT, ported straight from the Windows shaders
+* Volume up to 150%, mute, and audio sync up to 300 ms
+* Screenshots (also copied to the clipboard), recording, and 30 second instant replay
+* Low latency mode, which pauses filters and instant replay
+* Stats: display delay, frame rate, dropped frames, audio delay, signal, scale and mode
+* Picture in picture, and full screen on Mac
+* Settings panel, troubleshooting tips, and a waiting screen when the console is off
+* Controller shortcuts (hold Select and press a button) and keyboard shortcuts
+
+Platform differences:
+
+* **Microphone in recordings is Mac only.** iPadOS allows one audio input at a time, and that's the dongle.
+* **Full screen is Mac only.** iPad apps are already full screen.
+* **Where captures go:** Pictures and Movies, in a PortPlay folder, on Mac. The Photos library on iPad.
+
 Everything below can be done from a Windows laptop. GitHub's macOS runners do the building, signing and uploading.
 
 ## What's in here
 
 | Path | What it does |
 |---|---|
-| `PortPlay/` | Shared app source and app icons for both platforms |
+| `PortPlay/App` | App entry point |
+| `PortPlay/Model` | Settings, profiles and `AppModel`, which ties everything together like `renderer.js` |
+| `PortPlay/Capture` | Opens the dongle and hands every frame out |
+| `PortPlay/Render` | Metal renderer, scaling modes and the retro filter shaders |
+| `PortPlay/Audio` | Game audio, audio sync, volume and the Mac microphone mixer |
+| `PortPlay/Media` | Recording, instant replay, picture in picture and saving |
+| `PortPlay/Input` | Controller shortcuts |
+| `PortPlay/UI` | Control bar, settings panel, stats, tips, toasts and status screens |
 | `project.yml` | XcodeGen spec with an iPad target (`PortPlay`) and a Mac target (`PortPlayMac`). CI turns it into the Xcode project, so you never edit a project file by hand |
 | `fastlane/` | Signing (match) and TestFlight upload for each platform |
 | `.github/workflows/build-check.yml` | Compiles both apps on every push to catch Swift errors. No secrets needed |
@@ -88,12 +116,12 @@ Add each TestFlight build to its version and submit. You can submit the iPad ver
 
 **Test the Mac build on a real Mac before submitting it.** CI proves it compiles and signs, but only a Mac with a dongle proves it works.
 
-**Important for App Review:** reviewers probably won't have a capture dongle. In the review notes, explain that the app needs a USB HDMI (UVC) capture dongle and include a link to a short video of PortPlay working with a console. This avoids a rejection for "app does nothing."
+**Important for App Review:** reviewers probably won't have a capture dongle. In the review notes, explain that the app needs a USB HDMI (UVC) capture dongle and include a link to a short video of PortPlay working with a console. This avoids a rejection for "app does nothing." Also mention that the iPad app uses the background audio mode only so picture in picture keeps working.
 
 ## Notes
 
 * iPhone isn't supported because iOS has no driver for USB video devices. Only iPadOS does.
 * PlayStation consoles send HDCP by default, which blocks capture. Turn off HDCP in the console settings.
-* On Mac, PortPlay pairs the dongle's video and audio automatically. If it picks the wrong audio input, choose one under Audio in the device menu. Only USB audio inputs are listed, so it never plays your Mac's own microphone through the speakers.
-* Press M on Mac to mute. Use the green window button or Control-Command-F for full screen.
+* On Mac, PortPlay pairs the dongle's video and audio automatically. If it picks the wrong one, choose it under Game audio in settings.
+* Picture in picture on iPad keeps going only on iPads that allow camera use while multitasking. On others the picture pauses when PortPlay leaves the screen.
 * Video pauses if PortPlay shares the screen in Split View or Stage Manager on iPads that don't allow camera use while multitasking. The app tells the user when this happens.

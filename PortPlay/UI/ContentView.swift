@@ -1,0 +1,142 @@
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var flash = 0.0
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let renderer = model.renderer {
+                VideoSurface(renderer: renderer, pip: model.pip)
+                    .ignoresSafeArea()
+            }
+
+            if model.screen != .running {
+                StatusOverlay(screen: model.screen)
+                    .transition(.opacity)
+            }
+
+            if model.noSignal && model.isRunning {
+                NoSignalCard()
+            }
+
+            // Screenshot flash
+            Color.white
+                .opacity(flash)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
+            // Recording time and troubleshooting tips, top left
+            VStack(alignment: .leading, spacing: 12) {
+                if model.isRecording {
+                    RecordingIndicator(elapsed: model.recordingElapsed)
+                }
+                if let tip = model.tip {
+                    TipCard(tip: tip)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            // Stats, top right
+            if model.prefs.stats {
+                HUDView(values: model.hud)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.opacity)
+            }
+
+            // Toasts above the control bar
+            VStack(spacing: 14) {
+                Spacer(minLength: 0)
+                ToastStack()
+                if model.controlsVisible {
+                    ControlBar()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 18)
+
+            if model.settingsOpen {
+                SettingsPanel()
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+
+            KeyboardShortcuts()
+        }
+        .contentShape(Rectangle())
+        #if os(macOS)
+        .onTapGesture(count: 2) { model.toggleFullscreen() }
+        .onTapGesture { model.wake() }
+        .onContinuousHover { phase in
+            if case .active = phase { model.wake() }
+        }
+        .frame(minWidth: 480, minHeight: 270)
+        #else
+        .onTapGesture { model.tapStage() }
+        .statusBarHidden()
+        .persistentSystemOverlays(model.isRunning ? .hidden : .automatic)
+        #endif
+        .foregroundStyle(Theme.text)
+        .preferredColorScheme(.dark)
+        .animation(.easeInOut(duration: 0.3), value: model.controlsVisible)
+        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: model.settingsOpen)
+        .animation(.easeInOut(duration: 0.25), value: model.tip)
+        .animation(.easeInOut(duration: 0.4), value: model.screen)
+        .animation(.easeInOut(duration: 0.6), value: model.noSignal)
+        .onChange(of: model.flashToken) { _, _ in
+            flash = 0.55
+            withAnimation(.easeOut(duration: 0.45)) { flash = 0 }
+        }
+        .task { await model.launch() }
+    }
+}
+
+/// Keyboard shortcuts from the Windows version, as invisible buttons.
+/// They pause while typing a profile name.
+struct KeyboardShortcuts: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        ZStack {
+            Group {
+                key("c") { model.takeScreenshot() }
+                key("r") { model.toggleRecording() }
+                key("v") { model.saveReplay() }
+                key("s") { model.cycleScaling() }
+                key("e") { model.cycleFilter() }
+                key("m") { model.toggleMute() }
+                key("g") { model.setLowLatency(!model.prefs.lowLatency, announce: true) }
+                key("l") { model.setStats(!model.prefs.stats) }
+                key("p") { model.togglePiP() }
+                key("o") { model.toggleSettings() }
+                #if os(macOS)
+                key("f") { model.toggleFullscreen() }
+                #endif
+            }
+            .disabled(model.isTypingName)
+
+            Button("") {
+                if model.settingsOpen { model.settingsOpen = false }
+            }
+            .keyboardShortcut(.escape, modifiers: [])
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func key(_ character: Character, _ action: @escaping @MainActor () -> Void) -> some View {
+        Button("") {
+            model.wake()
+            action()
+        }
+        .keyboardShortcut(KeyEquivalent(character), modifiers: [])
+    }
+}

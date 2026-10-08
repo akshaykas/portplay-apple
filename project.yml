@@ -44,6 +44,9 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: PortPlay shows the video from your USB HDMI capture dongle so you can play your console on this iPad.
         NSMicrophoneUsageDescription: PortPlay plays your console's game audio, which arrives through the capture dongle as a USB audio input.
+        NSPhotoLibraryAddUsageDescription: PortPlay saves your screenshots, recordings and instant replays to Photos.
+        UIBackgroundModes:
+          - audio
         UILaunchScreen: {}
         UIStatusBarHidden: true
         UIRequiresFullScreen: false
@@ -80,3 +83,7 @@ targets:
         com.apple.security.app-sandbox: true
         com.apple.security.device.camera: true
         com.apple.security.device.audio-input: true
+        com.apple.security.device.bluetooth: true
+        com.apple.security.device.usb: true
+        com.apple.security.assets.pictures.read-write: true
+        com.apple.security.assets.movies.read-write: true
