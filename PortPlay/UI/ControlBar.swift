@@ -191,7 +191,7 @@ struct ControlBar: View {
             .help(Shortcut.tip("Delay and frame stats", "L"))
             .accessibilityLabel("Stats")
 
-            if model.pip.isSupported {
+            if model.pipSupported {
                 Button(action: { model.togglePiP() }) {
                     Image(systemName: model.pipActive ? "pip.exit" : "pip.enter")
                 }

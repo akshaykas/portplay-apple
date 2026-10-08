@@ -104,6 +104,9 @@ final class AppModel: ObservableObject {
     let pip: PiPManager
     private let audio = GameAudio()
     private let gamepad = GamepadInput()
+    #if os(macOS)
+    private let floating = FloatingPlayer()
+    #endif
     private let store: SettingsStore
 
     private var recorder: ClipRecorder?
@@ -161,6 +164,16 @@ final class AppModel: ObservableObject {
         pip.onFailure = { [weak self] in
             self?.toast("Picture in picture isn't available right now")
         }
+        #if os(macOS)
+        floating.onClose = { [weak self] in
+            self?.pipActive = false
+        }
+        floating.onDoubleClick = { [weak self] in
+            self?.floating.close()
+            NSApplication.shared.activate()
+            NSApplication.shared.windows.first { $0.isVisible && !($0 is NSPanel) }?.makeKeyAndOrderFront(nil)
+        }
+        #endif
         gamepad.onAction = { [weak self] action in
             self?.handleGamepad(action)
         }
@@ -351,7 +364,9 @@ final class AppModel: ObservableObject {
         }
 
         screen = .running
+        #if os(iOS)
         pip.beginFeeding()
+        #endif
         startAudio(for: device)
         checkCapabilities(wanted: wanted)
         startReplayIfWanted()
@@ -363,6 +378,9 @@ final class AppModel: ObservableObject {
         if isRecording { finishRecording() }
         stopReplay()
         pip.stop()
+        #if os(macOS)
+        floating.close()
+        #endif
         audio.stop()
         gameAudioRunning = false
         capture.close()
@@ -914,9 +932,24 @@ final class AppModel: ObservableObject {
 
     // MARK: Picture in picture and full screen
 
+    /// Mac uses its own floating window. iPad uses the system's picture in picture.
+    var pipSupported: Bool {
+        Self.isMac || pip.isSupported
+    }
+
     func togglePiP() {
         guard pipActive || needsStream() else { return }
+        #if os(macOS)
+        if floating.isOpen {
+            floating.close()
+        } else {
+            let size = mode.map { CGSize(width: Int($0.width), height: Int($0.height)) } ?? CGSize(width: 16, height: 9)
+            floating.show(session: capture.session, aspect: size)
+            pipActive = true
+        }
+        #else
         pip.toggle()
+        #endif
     }
 
     func toggleFullscreen() {
