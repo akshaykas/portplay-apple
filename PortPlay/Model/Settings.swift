@@ -63,7 +63,7 @@ enum RetroFilter: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Matches the mode numbers in Shaders.metal.
+    /// Matches the mode numbers in ShaderSource.
     var shaderMode: Int32 {
         switch self {
         case .off: return 0

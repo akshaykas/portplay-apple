@@ -23,7 +23,7 @@ final class VideoRenderer: @unchecked Sendable {
     private var latencies: [Double] = []
     private var currentScaleText = ""
 
-    /// Matches FilterUniforms in Shaders.metal.
+    /// Matches FilterUniforms in ShaderSource.
     private struct Uniforms {
         var srcSize: SIMD2<Float>
         var lines: Float
@@ -33,7 +33,7 @@ final class VideoRenderer: @unchecked Sendable {
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
               let queue = device.makeCommandQueue(),
-              let library = device.makeDefaultLibrary(),
+              let library = try? device.makeLibrary(source: ShaderSource.metal, options: nil),
               let vertex = library.makeFunction(name: "portplay_vertex"),
               let fragment = library.makeFunction(name: "portplay_fragment")
         else { return nil }

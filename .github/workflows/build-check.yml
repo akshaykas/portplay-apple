@@ -38,10 +38,19 @@ jobs:
 
       - name: Build ${{ matrix.scheme }}
         run: |
+          set -o pipefail
           xcodebuild build \
             -project PortPlay.xcodeproj \
             -scheme "${{ matrix.scheme }}" \
             -destination "${{ matrix.destination }}" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            PROVISIONING_PROFILE_SPECIFIER=""
+            PROVISIONING_PROFILE_SPECIFIER="" 2>&1 | tee build.log
+
+      # Lists every compiler error in one place, and on the run's Summary page
+      - name: Show compiler errors
+        if: failure()
+        run: |
+          echo "Compiler errors:"
+          grep -E "error:" build.log | sort -u | sed "s|$GITHUB_WORKSPACE/||" | head -60 | tee errors.txt
+          head -10 errors.txt | while IFS= read -r line; do echo "::error::$line"; done

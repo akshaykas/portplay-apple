@@ -1,3 +1,12 @@
+import Foundation
+
+/// The retro filter shaders, compiled when the app starts.
+///
+/// They live in a string instead of a .metal file because Xcode 26 ships its
+/// Metal compiler as a separate download that GitHub's build machines don't have.
+/// Compiling at launch takes a few milliseconds and needs nothing extra.
+enum ShaderSource {
+    static let metal = """
 #include <metal_stdlib>
 using namespace metal;
 
@@ -91,4 +100,6 @@ fragment float4 portplay_fragment(
     }
 
     return float4(clamp(color, 0.0, 1.0), 1.0);
+}
+"""
 }
