@@ -77,6 +77,11 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: PortPlay shows the video from your USB HDMI capture dongle so you can play your console on this Mac.
         NSMicrophoneUsageDescription: PortPlay plays your console's game audio, which arrives through the capture dongle as a USB audio input.
+        # Lets the website's "Open in Desktop" button open the app, like the Windows version
+        CFBundleURLTypes:
+          - CFBundleURLName: PortPlay
+            CFBundleURLSchemes:
+              - portplay
     entitlements:
       path: Config/PortPlay-macOS.entitlements
       properties:

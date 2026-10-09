@@ -94,6 +94,8 @@ struct ContentView: View {
             withAnimation(.easeOut(duration: 0.45)) { flash = 0 }
         }
         .task { await model.launch() }
+        // portplay://open from the website just brings PortPlay to the front
+        .onOpenURL { _ in model.wake() }
     }
 
     private var stageGestures: some View {
