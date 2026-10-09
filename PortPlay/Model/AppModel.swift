@@ -271,7 +271,8 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshDevices() {
-        devices = discovery?.devices ?? []
+        // An iPhone nearby can show up as a camera through Continuity Camera. It's never a dongle.
+        devices = (discovery?.devices ?? []).filter { !$0.isContinuityCamera }
 
         if let current = currentDevice {
             if devices.contains(current) { return }
