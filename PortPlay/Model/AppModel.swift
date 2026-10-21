@@ -117,6 +117,10 @@ final class AppModel: ObservableObject {
 
     private var discovery: AVCaptureDevice.DiscoverySession?
     private var discoveryObservation: NSKeyValueObservation?
+    #if os(macOS)
+    private var audioDiscovery: AVCaptureDevice.DiscoverySession?
+    private var audioDiscoveryObservation: NSKeyValueObservation?
+    #endif
     private var observers: [NSObjectProtocol] = []
     private var launched = false
     private var startToken: UUID?
@@ -245,7 +249,38 @@ final class AppModel: ObservableObject {
         discoveryObservation = discovery.observe(\.devices, options: [.initial, .new]) { [weak self] _, _ in
             Task { @MainActor in self?.devicesChanged() }
         }
+
+        #if os(macOS)
+        // A dongle's sound usually shows up a moment after its picture, so keep watching
+        let audioDiscovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        self.audioDiscovery = audioDiscovery
+        audioDiscoveryObservation = audioDiscovery.observe(\.devices, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.audioDevicesChanged() }
+        }
+        #endif
     }
+
+    #if os(macOS)
+    /// Starts the game sound once it appears, and moves on if it goes away.
+    private func audioDevicesChanged() {
+        guard let device = currentDevice else { return }
+        let fresh = GameAudio.availableSources()
+        guard fresh.map(\.id) != audioSources.map(\.id) else { return }
+
+        let playing = gameAudioRunning && fresh.contains { $0.id == activeGameAudioID }
+        if playing {
+            audioSources = fresh
+            autoAudio = autoDongleAudio(for: device, in: gameAudioSources)
+        } else {
+            audio.stop()
+            startAudio(for: device)
+        }
+    }
+    #endif
 
     // MARK: Devices
 
@@ -426,7 +461,17 @@ final class AppModel: ObservableObject {
 
         guard let chosen else {
             gameAudioRunning = false
-            if saved != .off { explainMissingAudio(failed: false) }
+            guard saved != .off else { return }
+            #if os(macOS)
+            // The sound may still be on its way, so only explain if it hasn't shown up
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard let self, self.currentDevice == device, !self.gameAudioRunning else { return }
+                self.explainMissingAudio(failed: false)
+            }
+            #else
+            explainMissingAudio(failed: false)
+            #endif
             return
         }
 
