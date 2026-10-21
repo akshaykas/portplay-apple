@@ -13,6 +13,9 @@ struct AudioSource: Identifiable, Hashable {
     /// USB vendor and product IDs when macOS reports them, for pairing with the video.
     let modelID: String
     let isUSB: Bool
+    /// The Mac's own microphone. Never game audio, since it would play the room
+    /// back through the speakers and feed back.
+    var isBuiltIn = false
 }
 
 enum AudioError: LocalizedError {
@@ -34,8 +37,8 @@ enum AudioError: LocalizedError {
 /// like the Windows version.
 ///
 /// * iPad: one AVAudioEngine, with the USB input as the session's input.
-/// * Mac: one engine reads the dongle and another plays to the speakers, joined by
-///   a small ring buffer, since the two devices run on separate clocks.
+/// * Mac: a capture session reads the dongle and an engine plays to the speakers,
+///   joined by a small ring buffer, since the two devices run on separate clocks.
 final class GameAudio: @unchecked Sendable {
     /// Recording feed, called on an audio thread. The time already includes the sync delay.
     var onBuffer: ((AVAudioPCMBuffer, CMTime) -> Void)?
@@ -53,7 +56,7 @@ final class GameAudio: @unchecked Sendable {
     #if os(iOS)
     private var engine: AVAudioEngine?
     #else
-    private var inputEngine: AVAudioEngine?
+    private var dongle: DongleAudioInput?
     private var outputEngine: AVAudioEngine?
     private var ring: AudioRing?
     private var mic: MicMixer?
@@ -81,7 +84,8 @@ final class GameAudio: @unchecked Sendable {
                 id: device.uniqueID,
                 name: device.localizedName,
                 modelID: device.modelID,
-                isUSB: UInt32(bitPattern: device.transportType) == kAudioDeviceTransportTypeUSB
+                isUSB: UInt32(bitPattern: device.transportType) == kAudioDeviceTransportTypeUSB,
+                isBuiltIn: UInt32(bitPattern: device.transportType) == kAudioDeviceTransportTypeBuiltIn
             )
         }
         #endif
@@ -125,13 +129,18 @@ final class GameAudio: @unchecked Sendable {
     // MARK: Recording feed
 
     private func deliver(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime) {
-        guard let onBuffer else { return }
         let captured: Double
         if time.isHostTimeValid {
             captured = AVAudioTime.seconds(forHostTime: time.hostTime)
         } else {
             captured = CACurrentMediaTime() - Double(buffer.frameLength) / buffer.format.sampleRate
         }
+        deliver(buffer, captured: captured)
+    }
+
+    /// `captured` is when the sound arrived, in host seconds.
+    private func deliver(_ buffer: AVAudioPCMBuffer, captured: Double) {
+        guard let onBuffer else { return }
         let synced = captured + Double(lock.withLock { delayMs }) / 1000
         var output = buffer
         #if os(macOS)
@@ -153,7 +162,7 @@ final class GameAudio: @unchecked Sendable {
         let session = AVAudioSession.sharedInstance()
         return (session.inputLatency + session.outputLatency + session.ioBufferDuration) * 1000 + sync
         #else
-        let input = inputEngine?.inputNode.presentationLatency ?? 0
+        let input = dongle?.bufferDuration ?? 0
         let output = outputEngine?.outputNode.presentationLatency ?? 0
         let cushion = ring.map { _ in 0.02 } ?? 0
         return (input + output + cushion) * 1000 + sync
@@ -170,10 +179,8 @@ final class GameAudio: @unchecked Sendable {
         }
         engine = nil
         #else
-        if let inputEngine {
-            inputEngine.inputNode.removeTap(onBus: 0)
-            inputEngine.stop()
-        }
+        dongle?.onAudio = nil
+        dongle?.stop()
         outputEngine?.stop()
         let oldMic = lock.withLock { () -> MicMixer? in
             let current = mic
@@ -181,7 +188,7 @@ final class GameAudio: @unchecked Sendable {
             return current
         }
         oldMic?.stop()
-        inputEngine = nil
+        dongle = nil
         outputEngine = nil
         ring = nil
         #endif
@@ -235,44 +242,22 @@ final class GameAudio: @unchecked Sendable {
     #else
     func start(_ source: AudioSource, mic micSource: AudioSource?, micLevel: Double) throws {
         stop()
-        guard let deviceID = Self.deviceID(forUID: source.id) else { throw AudioError.notFound }
+        guard let device = AVCaptureDevice(uniqueID: source.id) else { throw AudioError.notFound }
 
-        // Engine one: the dongle's sound into the ring
-        let inputEngine = AVAudioEngine()
-        let input = inputEngine.inputNode
-        guard let unit = input.audioUnit else { throw AudioError.couldNotSelect }
-        var device = deviceID
-        let status = AudioUnitSetProperty(
-            unit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &device,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
-        guard status == noErr else { throw AudioError.couldNotSelect }
-
-        let hardware = input.inputFormat(forBus: 0)
-        guard hardware.sampleRate > 0, hardware.channelCount > 0,
-              let format = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate, channels: min(hardware.channelCount, 2))
-        else { throw AudioError.noSignal }
-
+        // The dongle's sound into the ring, and on to recordings
+        let dongle = try DongleAudioInput(device: device)
+        let format = dongle.format
         let ring = AudioRing(
             channels: Int(format.channelCount),
             capacity: Int(format.sampleRate),
             target: Int(format.sampleRate * 0.02)
         )
-        let sink = AVAudioSinkNode { _, frameCount, bufferList in
-            ring.write(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: bufferList)), frames: Int(frameCount))
-            return noErr
-        }
-        inputEngine.attach(sink)
-        inputEngine.connect(input, to: sink, format: format)
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
-            self?.deliver(buffer, at: time)
+        dongle.onAudio = { [weak self] buffer, captured in
+            ring.write(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList), frames: Int(buffer.frameLength))
+            self?.deliver(buffer, captured: captured)
         }
 
-        // Engine two: the ring to the speakers, through audio sync and volume
+        // The ring to the speakers, through audio sync and volume
         let outputEngine = AVAudioEngine()
         let player = AVAudioSourceNode(format: format) { isSilence, _, frameCount, bufferList in
             let played = ring.readForPlayback(UnsafeMutableAudioBufferListPointer(bufferList), frames: Int(frameCount))
@@ -288,18 +273,16 @@ final class GameAudio: @unchecked Sendable {
         outputEngine.connect(gain, to: outputEngine.mainMixerNode, format: format)
 
         do {
-            inputEngine.prepare()
-            try inputEngine.start()
             outputEngine.prepare()
             try outputEngine.start()
         } catch {
-            input.removeTap(onBus: 0)
-            inputEngine.stop()
             outputEngine.stop()
+            dongle.onAudio = nil
             throw error
         }
+        dongle.start()
 
-        self.inputEngine = inputEngine
+        self.dongle = dongle
         self.outputEngine = outputEngine
         self.ring = ring
         self.format = format

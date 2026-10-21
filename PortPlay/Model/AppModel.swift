@@ -407,8 +407,9 @@ final class AppModel: ObservableObject {
     // MARK: Game audio
 
     private func startAudio(for device: AVCaptureDevice) {
-        let sources = GameAudio.availableSources()
-        audioSources = sources
+        audioSources = GameAudio.availableSources()
+        // A saved choice of the Mac's own microphone is ignored too, so it can't feed back
+        let sources = gameAudioSources
         let auto = autoDongleAudio(for: device, in: sources)
         autoAudio = auto
 
@@ -433,14 +434,24 @@ final class AppModel: ObservableObject {
             #if os(iOS)
             try audio.start(chosen)
             #else
-            let mic = sources.first { $0.id == prefs.micID && $0.id != chosen.id }
+            let mic = audioSources.first { $0.id == prefs.micID && $0.id != chosen.id }
             try audio.start(chosen, mic: mic, micLevel: prefs.micLevel)
             #endif
             gameAudioRunning = true
         } catch {
             gameAudioRunning = false
-            explainMissingAudio(failed: true)
+            explainMissingAudio(failed: true, reason: error.localizedDescription)
         }
+    }
+
+    /// Inputs that can be game audio. On a Mac this leaves out the built-in
+    /// microphone, which would play the room through the speakers and feed back.
+    var gameAudioSources: [AudioSource] {
+        #if os(macOS)
+        return audioSources.filter { !$0.isBuiltIn }
+        #else
+        return audioSources
+        #endif
     }
 
     /// Finds the dongle's sound, which shows up as a separate audio input.
@@ -480,7 +491,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Explains why there's no game sound, once the picture is up.
-    private func explainMissingAudio(failed: Bool) {
+    private func explainMissingAudio(failed: Bool, reason: String? = nil) {
         if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
             #if os(iOS)
             let text = "Your iPad isn't letting PortPlay use the microphone, and the dongle's sound arrives as one. Open Settings, find PortPlay, and turn on Microphone. Then reopen the app."
@@ -489,7 +500,8 @@ final class AppModel: ObservableObject {
             #endif
             showTip("audio-blocked", "Game sound is blocked", text)
         } else if failed {
-            showTip("audio-busy", "Couldn't open the game sound", "Another app may be using it. Close other apps that use the dongle, then reconnect.")
+            let detail = reason.map { "\($0) " } ?? ""
+            showTip("audio-busy", "Couldn't open the game sound", "\(detail)Another app may be using it. Close other apps that use the dongle, then unplug the dongle and plug it back in.")
         } else {
             #if os(iOS)
             let text = "Your dongle's sound didn't show up. Unplug the dongle and plug it back in, or open settings and choose it under Game audio."

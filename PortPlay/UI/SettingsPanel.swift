@@ -141,7 +141,7 @@ struct SettingsPanel: View {
                         .disabled(true)
                 } else {
                     let automatic = model.autoAudio.map { "Automatic (\($0.name))" } ?? "Automatic (not found)"
-                    let sources: [(String, String, Bool)] = model.audioSources.map { ($0.id, $0.name, true) }
+                    let sources: [(String, String, Bool)] = model.gameAudioSources.map { ($0.id, $0.name, true) }
                     let choices: [(String, String, Bool)] = [("auto", automatic, true), ("off", "None", true)] + sources
                     let selected = model.gameAudioSelection ?? "auto"
                     ChoiceMenu(
