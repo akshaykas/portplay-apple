@@ -47,6 +47,8 @@ final class GameAudio: @unchecked Sendable {
     private var delayMs = 0
     private var volume = 1.0
     private var muted = false
+    /// When the game sound was last louder than silence, in CACurrentMediaTime seconds
+    private var lastSound: CFTimeInterval = 0
     private(set) var format: AVAudioFormat?
     private(set) var isRunning = false
 
@@ -140,6 +142,7 @@ final class GameAudio: @unchecked Sendable {
 
     /// `captured` is when the sound arrived, in host seconds.
     private func deliver(_ buffer: AVAudioPCMBuffer, captured: Double) {
+        noteLevel(buffer)
         guard let onBuffer else { return }
         let synced = captured + Double(lock.withLock { delayMs }) / 1000
         var output = buffer
@@ -150,6 +153,36 @@ final class GameAudio: @unchecked Sendable {
         }
         #endif
         onBuffer(output, CMTime(seconds: synced, preferredTimescale: 1_000_000_000))
+    }
+
+    // MARK: Sound level, for Check my setup
+
+    /// Quieter than this is silence. HDMI silence is usually exactly zero.
+    private static let silence: Float = 0.003
+
+    private func noteLevel(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
+        let samples = channels[0]
+        var peak: Float = 0
+        for i in 0..<Int(buffer.frameLength) {
+            peak = max(peak, abs(samples[i]))
+        }
+        if peak >= Self.silence {
+            let now = CACurrentMediaTime()
+            lock.withLock { lastSound = now }
+        }
+    }
+
+    /// When the game sound was last audible, before volume and mute. Counts from
+    /// when the sound started, so silence since then counts too. Nil without game sound.
+    var lastSoundTime: CFTimeInterval? {
+        guard isRunning else { return nil }
+        return lock.withLock { lastSound }
+    }
+
+    private func markStarted() {
+        let now = CACurrentMediaTime()
+        lock.withLock { lastSound = now }
     }
 
     // MARK: Delay readout for stats
@@ -236,6 +269,7 @@ final class GameAudio: @unchecked Sendable {
         }
         self.engine = engine
         self.format = format
+        markStarted()
         isRunning = true
     }
 
@@ -286,6 +320,7 @@ final class GameAudio: @unchecked Sendable {
         self.outputEngine = outputEngine
         self.ring = ring
         self.format = format
+        markStarted()
         isRunning = true
 
         if let micSource {

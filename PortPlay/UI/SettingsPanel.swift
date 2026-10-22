@@ -1,5 +1,10 @@
 import AVFoundation
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// The settings sheet on the right, with the same sections as the Windows version.
 struct SettingsPanel: View {
@@ -13,6 +18,7 @@ struct SettingsPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     captureSection
+                    pictureSection
                     profilesSection
                     audioSection
                     recordingSection
@@ -90,6 +96,23 @@ struct SettingsPanel: View {
                     }
                 }
             }
+            Button("Check my setup") { model.openCheckup() }
+                .buttonStyle(PillButtonStyle(small: true))
+                .padding(.top, 4)
+            Text("Looks for common problems with the dongle, picture and sound, and explains how to fix them.")
+                .hint()
+        }
+    }
+
+    // MARK: Picture
+
+    private var pictureSection: some View {
+        SettingsSection("Picture") {
+            SwitchRow(
+                title: "Sharpen",
+                hint: "Makes 720p and 1080p look crisper on high resolution screens. Adds about one frame of delay, and pauses in low latency mode.",
+                isOn: Binding(get: { model.profile.sharpen }, set: { model.setSharpen($0) })
+            )
         }
     }
 
@@ -97,7 +120,7 @@ struct SettingsPanel: View {
 
     private var profilesSection: some View {
         SettingsSection("Profiles") {
-            Text("A profile remembers resolution, frame rate, scaling, filter and audio sync. The last profile you used with each capture device comes back automatically.")
+            Text("A profile remembers resolution, frame rate, scaling, filter, Sharpen and audio sync. The last profile you used with each capture device comes back automatically.")
                 .hint()
             HStack(spacing: 8) {
                 TextField("New profile name, like Switch", text: $newProfileName)
@@ -220,7 +243,7 @@ struct SettingsPanel: View {
             )
             SwitchRow(
                 title: "Low latency mode",
-                hint: "Pauses filters and instant replay so nothing sits between the dongle and your screen.",
+                hint: "Pauses filters, Sharpen and instant replay so nothing sits between the dongle and your screen.",
                 isOn: Binding(get: { model.prefs.lowLatency }, set: { model.setLowLatency($0, announce: true) })
             )
             Text(AppModel.isMac
@@ -235,8 +258,11 @@ struct SettingsPanel: View {
     private var controllerSection: some View {
         SettingsSection("Controller", icon: "gamecontroller") {
             Text(model.controllerStatus).hint()
-            Text("Hold Select (View, Share or Create) and press:").hint()
-            KeyList(rows: Self.controllerRows)
+            Text(model.controllerLayout.brand == .other
+                ? "Hold Select (View, Share or Create) and press:"
+                : "Hold \(model.controllerLayout.select) and press:")
+                .hint()
+            KeyList(rows: Self.controllerRows(model.controllerLayout))
             Text(AppModel.isMac
                 ? "This means a controller connected to this Mac, not the one paired with your console."
                 : "This means a controller connected to this iPad, not the one paired with your console.")
@@ -248,7 +274,7 @@ struct SettingsPanel: View {
 
     private var keyboardSection: some View {
         SettingsSection(AppModel.isMac ? "Keyboard shortcuts" : "Keyboard shortcuts with a keyboard") {
-            KeyList(rows: Self.keyboardRows)
+            KeyList(rows: Self.keyboardRows.map { KeyRow(key: $0.0, label: $0.1) })
         }
     }
 }
@@ -256,19 +282,40 @@ struct SettingsPanel: View {
 // MARK: - Shortcut lists
 
 private extension SettingsPanel {
-    static var controllerRows: [(String, String)] {
-        var rows: [(String, String)] = [
-            ("A", "Screenshot"),
-            ("B", "Start or stop recording"),
-            ("X", "Save instant replay"),
+    /// The buttons as they're printed on the controller in use: shapes on a
+    /// PlayStation controller, letters on Xbox and Nintendo ones.
+    static func controllerRows(_ layout: GamepadInput.Layout) -> [KeyRow] {
+        var actions: [(GamepadInput.Action, String)] = [
+            (.screenshot, "Screenshot"),
+            (.record, "Start or stop recording"),
+            (.replay, "Save instant replay"),
         ]
         if AppModel.isMac {
-            rows.append(("Y", "Full screen"))
+            actions.append((.fullscreen, "Full screen"))
         }
-        rows.append(("LB", "Next scaling mode"))
-        rows.append(("RB", "Next filter"))
-        rows.append(("Start", "Stats"))
-        return rows
+        actions.append((.nextScaling, "Next scaling mode"))
+        actions.append((.nextFilter, "Next filter"))
+        actions.append((.stats, "Stats"))
+
+        let fallback: [GamepadInput.Action: String] = [
+            .screenshot: "A", .record: "B", .replay: "X", .fullscreen: "Y",
+            .nextScaling: "LB", .nextFilter: "RB", .stats: "Start",
+        ]
+        // PlayStation face buttons, in their usual colors
+        let colors: [GamepadInput.Action: Color] = layout.brand == .playstation
+            ? [.screenshot: Color(hex: 0x8CB8F0), .record: Color(hex: 0xFF7A7A), .replay: Color(hex: 0xEAA2D6), .fullscreen: Color(hex: 0x4FD8A8)]
+            : [:]
+
+        return actions.map { action, label in
+            let button = layout.keys[action]
+            let symbol = button?.symbol.flatMap { KeyRow.symbolExists($0) ? $0 : nil }
+            return KeyRow(
+                key: button?.text ?? fallback[action] ?? "",
+                symbol: symbol,
+                tint: colors[action],
+                label: label
+            )
+        }
     }
 
     static var keyboardRows: [(String, String)] {
@@ -282,6 +329,7 @@ private extension SettingsPanel {
             ("V", "Save instant replay"),
             ("S", "Next scaling mode"),
             ("E", "Next filter"),
+            ("H", "Sharpen"),
             ("M", "Mute"),
             ("G", "Low latency mode"),
             ("L", "Stats"),
@@ -410,25 +458,54 @@ private struct SwitchRow: View {
     }
 }
 
+struct KeyRow {
+    var key: String
+    var symbol: String? = nil
+    var tint: Color? = nil
+    var label: String
+
+    /// Older systems may not have every controller symbol
+    static func symbolExists(_ name: String) -> Bool {
+        #if os(macOS)
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+        #else
+        return UIImage(systemName: name) != nil
+        #endif
+    }
+}
+
 private struct KeyList: View {
-    let rows: [(String, String)]
+    let rows: [KeyRow]
 
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 7) {
-            ForEach(rows, id: \.0) { row in
+            ForEach(rows, id: \.label) { row in
                 GridRow {
-                    Text(row.0)
+                    keyCap(row)
                         .font(.system(size: 12, weight: .bold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 1)
                         .frame(minWidth: 26)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Theme.raised))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.borderStrong, lineWidth: 1))
-                    Text(row.1)
+                    Text(row.label)
                         .font(.system(size: 13))
                         .foregroundStyle(Theme.muted)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func keyCap(_ row: KeyRow) -> some View {
+        if let symbol = row.symbol {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(row.tint ?? Theme.text)
+                .accessibilityLabel(row.key)
+        } else {
+            Text(row.key)
+                .foregroundStyle(row.tint ?? Theme.text)
         }
     }
 }

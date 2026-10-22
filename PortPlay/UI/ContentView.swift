@@ -76,6 +76,11 @@ struct ContentView: View {
                     .transition(.move(edge: .trailing))
             }
 
+            if model.checkupOpen {
+                CheckupView()
+                    .transition(.opacity)
+            }
+
             KeyboardShortcuts()
         }
         #if os(macOS)
@@ -123,6 +128,7 @@ struct KeyboardShortcuts: View {
                 key("v") { model.saveReplay() }
                 key("s") { model.cycleScaling() }
                 key("e") { model.cycleFilter() }
+                key("h") { model.setSharpen(!model.profile.sharpen, announce: true) }
                 key("m") { model.toggleMute() }
                 key("g") { model.setLowLatency(!model.prefs.lowLatency, announce: true) }
                 key("l") { model.setStats(!model.prefs.stats) }
@@ -134,7 +140,8 @@ struct KeyboardShortcuts: View {
             }
             .disabled(model.isTypingName)
 
-            Button("") { model.setSettings(false) }
+            // Closes settings or Check my setup, then leaves full screen
+            Button("") { model.handleEscape() }
                 .keyboardShortcut(.escape, modifiers: [])
         }
         .opacity(0)

@@ -34,8 +34,27 @@ vertex VertexOut portplay_vertex(uint vid [[vertex_id]]) {
 struct FilterUniforms {
     float2 srcSize;
     float lines;
-    int mode;   // 0 clean, 1 scanlines, 2 CRT
+    int mode;       // 0 clean, 1 scanlines, 2 CRT
+    float sharpen;  // 0 off, up to 1
 };
+
+// The source pixel, sharpened when Sharpen is on. Based on contrast adaptive
+// sharpening (AMD FidelityFX CAS): edges that are already crisp get less, so
+// soft 720p and 1080p pictures look sharper without halos or extra noise.
+static float3 source(texture2d<float> tex, sampler smp, float2 uv, constant FilterUniforms &u) {
+    float3 c = tex.sample(smp, uv).rgb;
+    if (u.sharpen <= 0.0) return c;
+    float2 t = 1.0 / u.srcSize;
+    float3 n = tex.sample(smp, uv - float2(0.0, t.y)).rgb;
+    float3 s = tex.sample(smp, uv + float2(0.0, t.y)).rgb;
+    float3 w = tex.sample(smp, uv - float2(t.x, 0.0)).rgb;
+    float3 e = tex.sample(smp, uv + float2(t.x, 0.0)).rgb;
+    float3 lo = min(c, min(min(n, s), min(w, e)));
+    float3 hi = max(c, max(max(n, s), max(w, e)));
+    float3 amount = sqrt(clamp(min(lo, 1.0 - hi) / max(hi, float3(0.0001)), 0.0, 1.0));
+    float3 weight = -amount / mix(8.0, 5.0, u.sharpen);
+    return clamp((c + (n + s + w + e) * weight) / (1.0 + 4.0 * weight), 0.0, 1.0);
+}
 
 // Bends the picture like the glass of an old tube TV
 static float2 curve(float2 uv) {
@@ -54,7 +73,7 @@ fragment float4 portplay_fragment(
     float2 uv = in.uv;
 
     if (u.mode == 0) {
-        return float4(tex.sample(smp, uv).rgb, 1.0);
+        return float4(source(tex, smp, uv, u), 1.0);
     }
 
     bool crt = u.mode == 2;
@@ -66,7 +85,7 @@ fragment float4 portplay_fragment(
         }
     }
 
-    float3 color = tex.sample(smp, uv).rgb;
+    float3 color = source(tex, smp, uv, u);
 
     if (crt) {
         // Color bleed: red and blue smear slightly sideways, as on composite video

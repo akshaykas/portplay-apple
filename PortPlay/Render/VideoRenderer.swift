@@ -6,7 +6,7 @@ import QuartzCore
 ///
 /// Like the Windows version, the clean picture goes straight to the screen through
 /// the system's own camera layer, which is the fastest path there is. Metal only
-/// draws the picture when it has to: for the retro filters and pixel perfect scaling.
+/// draws the picture when it has to: for the retro filters, Sharpen and pixel perfect scaling.
 final class VideoRenderer: @unchecked Sendable {
     enum Path: Equatable {
         /// AVCaptureVideoPreviewLayer shows the picture
@@ -31,6 +31,7 @@ final class VideoRenderer: @unchecked Sendable {
     private let lock = NSLock()
     private var scaling = ScaleMode.fit
     private var filter = RetroFilter.off
+    private var sharpen = false
     private var pixelsPerPoint: CGFloat = 1
     private var lastBuffer: CVPixelBuffer?
     private var latencies: [Double] = []
@@ -44,7 +45,11 @@ final class VideoRenderer: @unchecked Sendable {
         var srcSize: SIMD2<Float>
         var lines: Float
         var mode: Int32
+        var sharpen: Float
     }
+
+    /// 0 to 1. Enough to bring back detail lost in the dongle's video compression.
+    private static let sharpenStrength: Float = 0.6
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(),
@@ -99,12 +104,14 @@ final class VideoRenderer: @unchecked Sendable {
 
     // MARK: Settings, from the main thread
 
-    func configure(scaling: ScaleMode, filter: RetroFilter, lowLatency: Bool) {
+    func configure(scaling: ScaleMode, filter: RetroFilter, sharpen: Bool, lowLatency: Bool) {
         let activeFilter = lowLatency ? RetroFilter.off : filter
-        let newPath: Path = activeFilter == .off && scaling != .integer ? .direct : .metal
+        let activeSharpen = sharpen && !lowLatency
+        let newPath: Path = activeFilter == .off && !activeSharpen && scaling != .integer ? .direct : .metal
         lock.withLock {
             self.scaling = scaling
             self.filter = activeFilter
+            self.sharpen = activeSharpen
             self.currentPath = newPath
             #if os(macOS)
             self.syncedToDisplay = !lowLatency
@@ -192,7 +199,7 @@ final class VideoRenderer: @unchecked Sendable {
             pass.colorAttachments[0].storeAction = .store
             guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
 
-            let (scaling, filter, scale) = lock.withLock { (self.scaling, self.filter, self.pixelsPerPoint) }
+            let (scaling, filter, sharpen, scale) = lock.withLock { (self.scaling, self.filter, self.sharpen, self.pixelsPerPoint) }
             var cvTexture: CVMetalTexture?
 
             if let pixelBuffer, let cache = textureCache {
@@ -221,7 +228,8 @@ final class VideoRenderer: @unchecked Sendable {
                     var uniforms = Uniforms(
                         srcSize: SIMD2(Float(width), Float(height)),
                         lines: Self.scanlineCount(forHeight: height),
-                        mode: filter.shaderMode
+                        mode: filter.shaderMode,
+                        sharpen: sharpen ? Self.sharpenStrength : 0
                     )
                     encoder.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 0)
                     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)

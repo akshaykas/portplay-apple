@@ -200,6 +200,8 @@ struct SetupSteps: View {
 
 /// The dongle is connected but the picture is black or frozen.
 struct NoSignalCard: View {
+    @EnvironmentObject private var model: AppModel
+
     var body: some View {
         ZStack {
             Theme.background.opacity(0.88).ignoresSafeArea()
@@ -215,12 +217,15 @@ struct NoSignalCard: View {
                     .foregroundStyle(Theme.text.opacity(0.85))
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
-                Text("Still nothing? Check that the HDMI cable goes from the console into the dongle, and that the console's video output is set to 1080p or lower.")
+                Text("Still nothing? Check that the HDMI cable goes from the console into the dongle, and that the console's video output is set to 1080p or lower. PlayStation consoles also need HDCP turned off.")
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
                     .lineSpacing(3)
                     .padding(.top, 10)
+                Button("Check my setup") { model.openCheckup() }
+                    .buttonStyle(PillButtonStyle(small: true))
+                    .padding(.top, 16)
             }
             .frame(maxWidth: 440)
             .padding(24)
@@ -244,6 +249,126 @@ struct NoSignalCard: View {
                     .foregroundStyle(Theme.accent)
             }
             .frame(width: 96, height: 96)
+        }
+    }
+}
+
+// MARK: - Check my setup
+
+struct CheckupView: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        ZStack {
+            Color(red: 4 / 255, green: 5 / 255, blue: 8 / 255).opacity(0.62)
+                .ignoresSafeArea()
+                .onTapGesture { model.closeCheckup() }
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Check my setup")
+                        .font(.system(size: 19, weight: .bold))
+                    Spacer()
+                    Button {
+                        model.closeCheckup()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(IconButtonStyle())
+                    .accessibilityLabel("Close")
+                }
+                Text(model.checkupSummary)
+                    .hint()
+                    .padding(.top, 2)
+
+                // Scrolls only when the window is too short for the whole list
+                ViewThatFits(in: .vertical) {
+                    rows
+                    ScrollView { rows }
+                        .scrollIndicators(.automatic)
+                }
+
+                HStack(spacing: 10) {
+                    Spacer()
+                    Button("Check again") { model.runCheckup() }
+                        .buttonStyle(PillButtonStyle(small: true))
+                        .disabled(model.checkupRunning)
+                        .opacity(model.checkupRunning ? 0.5 : 1)
+                    Button("Done") { model.closeCheckup() }
+                        .buttonStyle(PillButtonStyle(primary: true, small: true))
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: 460)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.panelSolid))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.borderStrong, lineWidth: 1))
+            .shadow(color: .black.opacity(0.45), radius: 25, y: 18)
+            .padding(16)
+        }
+    }
+
+    private var rows: some View {
+        VStack(spacing: 8) {
+            ForEach(model.checks) { check in
+                CheckRow(check: check)
+            }
+        }
+        .padding(.vertical, 14)
+    }
+}
+
+private struct CheckRow: View {
+    let check: SetupCheck
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            icon
+                .frame(width: 22, height: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(check.title)
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(check.status == .pending ? Theme.muted : Theme.text)
+                    .frame(minHeight: 22, alignment: .leading)
+                if !check.text.isEmpty {
+                    Text(check.text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.muted)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.raised))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch check.status {
+        case .pending:
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.accent)
+        case .good:
+            badge("checkmark", Theme.good)
+        case .warn:
+            badge("exclamationmark", Theme.warn)
+        case .bad:
+            badge("xmark", Theme.danger)
+        case .info:
+            badge("info", Theme.muted)
+        }
+    }
+
+    private func badge(_ symbol: String, _ color: Color) -> some View {
+        ZStack {
+            Circle().fill(color)
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .heavy))
+                .foregroundStyle(Color(hex: 0x0B0D12))
         }
     }
 }

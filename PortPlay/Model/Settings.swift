@@ -86,7 +86,23 @@ struct Profile: Codable, Equatable {
     var framerate = 60
     var scaling = ScaleMode.fit
     var filter = RetroFilter.off
+    var sharpen = false
     var audioDelay = 0
+
+    init() {}
+
+    /// Profiles saved by older versions are missing newer settings. Those get
+    /// their defaults instead of failing to load and resetting every profile.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Profile()
+        resolution = try c.decodeIfPresent(String.self, forKey: .resolution) ?? defaults.resolution
+        framerate = try c.decodeIfPresent(Int.self, forKey: .framerate) ?? defaults.framerate
+        scaling = (try? c.decodeIfPresent(ScaleMode.self, forKey: .scaling)) ?? defaults.scaling
+        filter = (try? c.decodeIfPresent(RetroFilter.self, forKey: .filter)) ?? defaults.filter
+        sharpen = try c.decodeIfPresent(Bool.self, forKey: .sharpen) ?? defaults.sharpen
+        audioDelay = try c.decodeIfPresent(Int.self, forKey: .audioDelay) ?? defaults.audioDelay
+    }
 }
 
 struct NamedProfile: Codable, Equatable, Identifiable {

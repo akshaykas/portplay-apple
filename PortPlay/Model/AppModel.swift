@@ -23,6 +23,21 @@ struct Tip: Identifiable, Equatable {
     let text: String
 }
 
+/// One line in Check my setup.
+struct SetupCheck: Identifiable, Equatable {
+    enum Status { case pending, good, warn, bad, info }
+    let id: String
+    let status: Status
+    let title: String
+    var text = ""
+}
+
+/// Why there's no game sound, for Check my setup.
+enum AudioProblem: Equatable {
+    case off, missing, blocked
+    case failed(String)
+}
+
 struct HUDValues: Equatable {
     enum Grade { case none, good, ok, bad }
     var latency = "n/a"
@@ -87,6 +102,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var toasts: [Toast] = []
     @Published private(set) var tip: Tip?
     @Published private(set) var controllerStatus = ""
+    @Published private(set) var controllerLayout = GamepadInput.Layout(brand: .other, select: "Select", keys: [:])
+
+    @Published private(set) var checkupOpen = false
+    @Published private(set) var checks: [SetupCheck] = []
+    @Published private(set) var checkupSummary = ""
+    @Published private(set) var checkupRunning = false
+    private var checkupToken = UUID()
+    private var audioProblem: AudioProblem?
     @Published var isTypingName = false
 
     /// Fast-changing numbers, observed only by the views that show them.
@@ -184,8 +207,14 @@ final class AppModel: ObservableObject {
         gamepad.onStatusChange = { [weak self] status in
             self?.controllerStatus = status
         }
+        gamepad.onLayoutChange = { [weak self] layout in
+            if self?.controllerLayout != layout { self?.controllerLayout = layout }
+        }
         gamepad.onConnect = { [weak self] in
-            self?.toast("Controller connected. Hold Select and press A for a screenshot.", duration: 5)
+            guard let self else { return }
+            let layout = self.gamepad.layout
+            let button = layout.keys[.screenshot]?.text ?? "A"
+            self.toast("Controller connected. Hold \(layout.select) and press \(button) for a screenshot.", duration: 5)
         }
 
         applyRenderer()
@@ -419,6 +448,7 @@ final class AppModel: ObservableObject {
         #endif
         audio.stop()
         gameAudioRunning = false
+        audioProblem = nil
         capture.close()
         renderer?.clear()
         hub.reset()
@@ -461,6 +491,7 @@ final class AppModel: ObservableObject {
 
         guard let chosen else {
             gameAudioRunning = false
+            audioProblem = saved == .off ? AudioProblem.off : AudioProblem.missing
             guard saved != .off else { return }
             #if os(macOS)
             // The sound may still be on its way, so only explain if it hasn't shown up
@@ -483,8 +514,12 @@ final class AppModel: ObservableObject {
             try audio.start(chosen, mic: mic, micLevel: prefs.micLevel)
             #endif
             gameAudioRunning = true
+            audioProblem = nil
         } catch {
             gameAudioRunning = false
+            audioProblem = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+                ? AudioProblem.failed(error.localizedDescription)
+                : AudioProblem.blocked
             explainMissingAudio(failed: true, reason: error.localizedDescription)
         }
     }
@@ -715,7 +750,7 @@ final class AppModel: ObservableObject {
     // MARK: Scaling and filters
 
     private func applyRenderer() {
-        renderer?.configure(scaling: profile.scaling, filter: profile.filter, lowLatency: prefs.lowLatency)
+        renderer?.configure(scaling: profile.scaling, filter: profile.filter, sharpen: profile.sharpen, lowLatency: prefs.lowLatency)
     }
 
     func setScaling(_ mode: ScaleMode) {
@@ -748,6 +783,17 @@ final class AppModel: ObservableObject {
         toast("Filter: \(next.label)", duration: 1.5)
     }
 
+    func setSharpen(_ on: Bool, announce: Bool = false) {
+        setProfileValue { $0.sharpen = on }
+        if prefs.lowLatency && on {
+            setLowLatency(false)
+            toast("Low latency mode is off so Sharpen can run")
+        } else if announce {
+            toast(on ? "Sharpen on" : "Sharpen off", duration: 1.5)
+        }
+        applyRenderer()
+    }
+
     // MARK: Low latency mode
 
     func setLowLatency(_ on: Bool, announce: Bool = false) {
@@ -760,7 +806,7 @@ final class AppModel: ObservableObject {
             startReplayIfWanted()
         }
         if announce {
-            toast(on ? "Low latency mode on. Filters and instant replay are paused." : "Low latency mode off")
+            toast(on ? "Low latency mode on. Filters, Sharpen and instant replay are paused." : "Low latency mode off")
         }
     }
 
@@ -789,10 +835,155 @@ final class AppModel: ObservableObject {
 
         var parts = [prefs.lowLatency ? "Low latency" : "Normal"]
         if filterActive { parts.append("\(profile.filter.label) filter") }
+        if profile.sharpen && !prefs.lowLatency { parts.append("sharpen") }
         if replay != nil { parts.append("replay on") }
         values.mode = parts.joined(separator: ", ")
 
         if values != live.hud { live.hud = values }
+    }
+
+    // MARK: Check my setup
+
+    private static let silentAudioAdvice = "Check that your console sends its sound over HDMI, not to a headset. Unplug any USB headset or Bluetooth adapter from the console, and check that the game isn't muted."
+
+    private static let hdcpAdvice = "PlayStation consoles block capture unless HDCP is off. On a PS5, go to Settings, System, HDMI and turn off Enable HDCP. On a PS4, it's Settings, System, Enable HDCP."
+
+    func openCheckup() {
+        setSettings(false)
+        withAnimation(.easeOut(duration: 0.2)) { checkupOpen = true }
+        runCheckup()
+    }
+
+    func closeCheckup() {
+        checkupToken = UUID()
+        checkupRunning = false
+        withAnimation(.easeOut(duration: 0.2)) { checkupOpen = false }
+    }
+
+    /// Watches the picture and sound for four seconds, then lists anything that needs fixing.
+    func runCheckup() {
+        let token = UUID()
+        checkupToken = token
+        checkupRunning = true
+        checkupSummary = "Watching the picture and sound for a few seconds."
+        checks = ["Capture dongle", "Picture", "USB connection", "Game sound", "Performance"].map {
+            SetupCheck(id: $0, status: .pending, title: $0)
+        }
+
+        Task { @MainActor in
+            let started = CACurrentMediaTime()
+            let droppedBefore = hub.dropped
+            var fpsSamples: [Int] = []
+            var dark = 0
+            var samples = 0
+            for _ in 0..<8 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard checkupToken == token else { return }
+                guard isRunning else { continue }
+                samples += 1
+                fpsSamples.append(hub.framesPerSecond)
+                if Self.isBlack(hub.latest) { dark += 1 }
+            }
+            let heardSound = (audio.lastSoundTime ?? 0) > started
+            let results = collectChecks(
+                fpsSamples: fpsSamples,
+                dark: dark,
+                samples: samples,
+                heardSound: heardSound,
+                dropped: hub.dropped - droppedBefore
+            )
+            guard checkupToken == token else { return }
+
+            checks = results
+            let problems = results.filter { $0.status == .bad || $0.status == .warn }.count
+            switch problems {
+            case 0: checkupSummary = "Everything looks good."
+            case 1: checkupSummary = "One thing to look at."
+            default: checkupSummary = "\(problems) things to look at, starting with the first."
+            }
+            checkupRunning = false
+        }
+    }
+
+    private func collectChecks(fpsSamples: [Int], dark: Int, samples: Int, heardSound: Bool, dropped: Int) -> [SetupCheck] {
+        var checks: [SetupCheck] = []
+
+        // Capture dongle
+        guard isRunning else {
+            if screen == .denied {
+                checks.append(SetupCheck(id: "dongle", status: .bad, title: "Camera access is off", text: Self.isMac
+                    ? "Your dongle counts as a camera. Open System Settings, go to Privacy & Security, then Camera, and turn on PortPlay. Then reopen the app."
+                    : "Your dongle counts as a camera. Open Settings, find PortPlay, and turn on Camera."))
+            } else if case .interrupted(let reason) = screen {
+                checks.append(SetupCheck(id: "dongle", status: .warn, title: "Video is paused", text: reason))
+            } else if devices.isEmpty {
+                checks.append(SetupCheck(id: "dongle", status: .bad, title: "No capture dongle found", text: Self.isMac
+                    ? "Plug the dongle into a USB port on this Mac. If it's already plugged in, unplug it, wait a few seconds and plug it back in, or try another port."
+                    : "Plug the dongle into the iPad's USB-C port, directly or through an adapter. If it's already plugged in, unplug it, wait a few seconds and plug it back in."))
+            } else {
+                checks.append(SetupCheck(id: "dongle", status: .warn, title: "Dongle found but not connected", text: "Choose it under Device in settings. If it still won't connect, close other apps that use the camera, like OBS, Zoom or FaceTime."))
+            }
+            return checks
+        }
+        checks.append(SetupCheck(id: "dongle", status: .good, title: "Capture dongle", text: "Connected to \(currentDevice?.localizedName ?? "your dongle")."))
+
+        // Picture
+        let fps = fpsSamples.isEmpty ? 0 : Int((Double(fpsSamples.reduce(0, +)) / Double(fpsSamples.count)).rounded())
+        let live = fps > 0 && dark < samples
+        if fps == 0 {
+            checks.append(SetupCheck(id: "picture", status: .bad, title: "No picture from the console", text: "Turn the console on and wake it with its controller. Check that the HDMI cable goes from the console into the dongle. " + Self.hdcpAdvice))
+        } else if !live {
+            checks.append(SetupCheck(id: "picture", status: .warn, title: "The picture is black", text: "If the console is on, it may be blocking capture. " + Self.hdcpAdvice + " Also set the console's video output to 1080p or lower."))
+        } else {
+            checks.append(SetupCheck(id: "picture", status: .good, title: "Picture", text: "\(Resolutions.label(runningResolution)) at \(fps) fps."))
+        }
+
+        // USB connection
+        let target = mode?.fps ?? 0
+        if profile.framerate >= 50, caps.maxFps.isFinite, caps.maxFps < 49 {
+            checks.append(SetupCheck(id: "usb", status: .warn, title: "Your dongle tops out at \(Int(caps.maxFps.rounded())) fps", text: Self.isMac
+                ? "This usually means a USB 2 cable, hub or adapter. Plug the dongle straight into the Mac, or use a USB 3 cable or hub. If it already is, the dongle may be a USB 2 model."
+                : "This usually means a USB 2 hub or adapter. Plug the dongle straight into the iPad. If it already is, the dongle may be a USB 2 model."))
+        } else if live, target >= 25, Double(fps) < target * 0.75 {
+            checks.append(SetupCheck(id: "usb", status: .warn, title: "Running at \(fps) fps instead of \(Int(target.rounded()))", text: "Plug the dongle straight into the \(Self.isMac ? "Mac" : "iPad"), set your console's video output to 1080p, or pick a lower resolution in settings."))
+        } else if live {
+            checks.append(SetupCheck(id: "usb", status: .good, title: "USB connection", text: "Fast enough for full speed."))
+        }
+
+        // Game sound
+        switch audioProblem {
+        case .off?:
+            checks.append(SetupCheck(id: "sound", status: .info, title: "Game sound is off", text: "Game audio is set to None in settings."))
+        case .blocked?:
+            checks.append(SetupCheck(id: "sound", status: .bad, title: "Game sound is blocked", text: Self.isMac
+                ? "The dongle's sound counts as a microphone. Open System Settings, go to Privacy & Security, then Microphone, and turn on PortPlay. Then reopen the app."
+                : "The dongle's sound counts as a microphone. Open Settings, find PortPlay, and turn on Microphone. Then reopen the app."))
+        case .failed(let reason)?:
+            checks.append(SetupCheck(id: "sound", status: .bad, title: "Couldn't open the game sound", text: "\(reason) Close other apps that use the dongle, then unplug it and plug it back in."))
+        case .missing?, nil:
+            if !gameAudioRunning {
+                checks.append(SetupCheck(id: "sound", status: .bad, title: "Couldn't find the game sound", text: Self.isMac
+                    ? "Choose your dongle under Game audio in settings. If it isn't listed, unplug the dongle and plug it back in."
+                    : "Unplug the dongle and plug it back in, or choose it under Game audio in settings."))
+            } else if live && !heardSound {
+                checks.append(SetupCheck(id: "sound", status: .warn, title: "No sound from the console", text: Self.silentAudioAdvice))
+            } else if prefs.muted || prefs.volume <= 0.001 {
+                checks.append(SetupCheck(id: "sound", status: .warn, title: "PortPlay is muted", text: Self.isMac ? "Press M or raise the volume." : "Turn the volume up in the control bar."))
+            } else {
+                checks.append(SetupCheck(id: "sound", status: .good, title: "Game sound", text: live ? "Sound is coming through." : "Ready."))
+            }
+        }
+
+        // Performance, only meaningful with a live picture
+        if live {
+            if Double(dropped) > max(8, Double(fps) * 0.4) {
+                checks.append(SetupCheck(id: "performance", status: .warn, title: "Frames are being dropped", text: "PortPlay is falling behind drawing the picture. Turn off filters, Sharpen and instant replay, or try low latency mode."))
+            } else {
+                checks.append(SetupCheck(id: "performance", status: .good, title: "Performance", text: "Keeping up with the console."))
+            }
+        }
+
+        return checks
     }
 
     // MARK: Watching the signal
@@ -813,6 +1004,12 @@ final class AppModel: ObservableObject {
         let showWaiting = darkSeconds >= 4
         if noSignal != showWaiting { noSignal = showWaiting }
         if noPicture { return }
+
+        // A picture but no sound for a while usually means the console sends its
+        // sound somewhere else, like a USB headset adapter
+        if gameAudioRunning, let lastSound = audio.lastSoundTime, CACurrentMediaTime() - lastSound >= 20 {
+            showTip("silent-audio", "No sound from your console", Self.silentAudioAdvice + " Check my setup in settings can help too.")
+        }
 
         // Frame rate well under what the dongle says it is sending
         let target = mode?.fps ?? 0
@@ -1012,9 +1209,31 @@ final class AppModel: ObservableObject {
 
     func toggleFullscreen() {
         #if os(macOS)
-        let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first { $0.isVisible }
-        window?.toggleFullScreen(nil)
+        mainWindow?.toggleFullScreen(nil)
         #endif
+    }
+
+    #if os(macOS)
+    /// The PortPlay window, never the floating mini player.
+    private var mainWindow: NSWindow? {
+        if let key = NSApplication.shared.keyWindow, !(key is NSPanel) { return key }
+        return NSApplication.shared.windows.first { $0.isVisible && !($0 is NSPanel) }
+    }
+    #endif
+
+    /// Escape closes whatever is open on top, then leaves full screen.
+    func handleEscape() {
+        if checkupOpen {
+            closeCheckup()
+        } else if settingsOpen {
+            setSettings(false)
+        } else {
+            #if os(macOS)
+            if let window = mainWindow, window.styleMask.contains(.fullScreen) {
+                window.toggleFullScreen(nil)
+            }
+            #endif
+        }
     }
 
     // MARK: Settings panel
