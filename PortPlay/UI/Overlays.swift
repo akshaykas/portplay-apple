@@ -373,6 +373,35 @@ private struct CheckRow: View {
     }
 }
 
+// MARK: - Clock
+
+/// The time in HH:MM AM/PM, like 09:05 PM. Redraws once a minute.
+struct ClockView: View {
+    private static let format: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "hh:mm a"
+        return f
+    }()
+
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            Text(Self.format.string(from: context.date))
+                .font(.system(size: 20, weight: .bold))
+                .monospacedDigit()
+                .kerning(0.4)
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.45)))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+                .fixedSize()
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 // MARK: - Stats
 
 struct HUDView: View {

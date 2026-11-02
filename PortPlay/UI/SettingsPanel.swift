@@ -19,6 +19,7 @@ struct SettingsPanel: View {
                 VStack(alignment: .leading, spacing: 0) {
                     captureSection
                     pictureSection
+                    clockSection
                     profilesSection
                     audioSection
                     recordingSection
@@ -113,6 +114,22 @@ struct SettingsPanel: View {
                 hint: "Makes 720p and 1080p look crisper on high resolution screens. Adds about one frame of delay, and pauses in low latency mode.",
                 isOn: Binding(get: { model.profile.sharpen }, set: { model.setSharpen($0) })
             )
+        }
+    }
+
+    // MARK: Clock
+
+    private var clockSection: some View {
+        SettingsSection("Clock") {
+            SwitchRow(
+                title: AppModel.isMac ? "Show a clock in full screen" : "Show a clock",
+                hint: AppModel.isMac
+                    ? "Shows the time in a corner while PortPlay is full screen. Press K or use the clock button to turn it on or off."
+                    : "Shows the time in a corner of the screen. Use the clock button, or K on a keyboard, to turn it on or off.",
+                isOn: Binding(get: { model.prefs.clock }, set: { model.setClock($0) })
+            )
+            CornerPicker(selection: model.prefs.clockCorner) { model.setClockCorner($0) }
+                .accessibilityLabel("Clock corner")
         }
     }
 
@@ -333,6 +350,7 @@ private extension SettingsPanel {
             ("M", "Mute"),
             ("G", "Low latency mode"),
             ("L", "Stats"),
+            ("K", AppModel.isMac ? "Clock in full screen" : "Clock"),
             ("P", "Picture in picture"),
             ("O", "Settings"),
         ]
@@ -438,6 +456,49 @@ struct ChoiceMenu: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+    }
+}
+
+/// Four corners in a two by two grid, styled like the segmented choices.
+private struct CornerPicker: View {
+    let selection: ClockCorner
+    let choose: (ClockCorner) -> Void
+
+    var body: some View {
+        Grid(horizontalSpacing: 4, verticalSpacing: 4) {
+            GridRow {
+                cell(.topLeft)
+                cell(.topRight)
+            }
+            GridRow {
+                cell(.bottomLeft)
+                cell(.bottomRight)
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    private func cell(_ corner: ClockCorner) -> some View {
+        let selected = corner == selection
+        return Button {
+            choose(corner)
+        } label: {
+            Text(corner.label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(selected ? Color.white : Theme.muted)
+                .frame(maxWidth: .infinity)
+                .frame(height: 30)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Theme.accentStrong)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

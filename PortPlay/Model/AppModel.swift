@@ -111,6 +111,8 @@ final class AppModel: ObservableObject {
     private var checkupToken = UUID()
     private var audioProblem: AudioProblem?
     @Published var isTypingName = false
+    /// iPad apps are always full screen. On Mac this follows the window.
+    @Published private(set) var isFullScreen = !AppModel.isMac
 
     /// Fast-changing numbers, observed only by the views that show them.
     let live = LiveStats()
@@ -220,6 +222,9 @@ final class AppModel: ObservableObject {
         applyRenderer()
         audio.setVolume(prefs.volume, muted: prefs.muted)
         audio.setDelay(ms: profile.audioDelay)
+        #if os(macOS)
+        observeFullScreen()
+        #endif
     }
 
     // MARK: Derived values
@@ -1185,6 +1190,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Clock
+
+    /// The clock only shows while full screen, which on iPad is always.
+    var clockShowing: Bool { prefs.clock && isFullScreen }
+
+    func setClock(_ on: Bool, announce: Bool = false) {
+        prefs.clock = on
+        savePrefs()
+        if announce {
+            toast(on ? (isFullScreen ? "Clock on" : "Clock on. It shows in full screen.") : "Clock off", duration: 1.5)
+        }
+    }
+
+    func setClockCorner(_ corner: ClockCorner) {
+        prefs.clockCorner = corner
+        savePrefs()
+    }
+
     // MARK: Picture in picture and full screen
 
     /// Mac uses its own floating window. iPad uses the system's picture in picture.
@@ -1214,6 +1237,24 @@ final class AppModel: ObservableObject {
     }
 
     #if os(macOS)
+    private func observeFullScreen() {
+        let center = NotificationCenter.default
+        for (name, value) in [
+            (NSWindow.didEnterFullScreenNotification, true),
+            (NSWindow.didExitFullScreenNotification, false),
+        ] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let window = note.object as? NSWindow, !(window is NSPanel) else { return }
+                Task { @MainActor in self?.isFullScreen = value }
+            })
+        }
+        // The window can come back full screen when the app reopens
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isFullScreen = self.mainWindow?.styleMask.contains(.fullScreen) ?? false
+        }
+    }
+
     /// The PortPlay window, never the floating mini player.
     private var mainWindow: NSWindow? {
         if let key = NSApplication.shared.keyWindow, !(key is NSPanel) { return key }

@@ -200,6 +200,17 @@ struct ControlBar: View {
                 .accessibilityLabel("Picture in picture")
             }
 
+            if model.isFullScreen {
+                Button {
+                    model.setClock(!model.prefs.clock, announce: true)
+                } label: {
+                    Image(systemName: model.prefs.clock ? "clock.fill" : "clock")
+                }
+                .buttonStyle(IconButtonStyle(active: model.prefs.clock))
+                .help(Shortcut.tip("Clock", "K"))
+                .accessibilityLabel("Clock")
+            }
+
             if AppModel.isMac {
                 Button(action: { model.toggleFullscreen() }) {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")

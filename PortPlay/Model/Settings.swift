@@ -78,6 +78,28 @@ enum RetroFilter: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Where the full screen clock sits.
+enum ClockCorner: String, Codable, CaseIterable, Identifiable {
+    case topLeft = "top-left"
+    case topRight = "top-right"
+    case bottomLeft = "bottom-left"
+    case bottomRight = "bottom-right"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .topLeft: return "Top left"
+        case .topRight: return "Top right"
+        case .bottomLeft: return "Bottom left"
+        case .bottomRight: return "Bottom right"
+        }
+    }
+
+    var isTop: Bool { self == .topLeft || self == .topRight }
+    var isLeft: Bool { self == .topLeft || self == .bottomLeft }
+}
+
 // MARK: - Profiles
 
 /// Settings that belong to a profile. Everything else is shared.
@@ -130,6 +152,29 @@ struct Prefs: Codable, Equatable {
     /// Keyed by the capture device's name. Missing means automatic.
     var gameAudio: [String: GameAudioChoice] = [:]
     var videoDevice = ""
+    /// Clock shown while full screen, and which corner it sits in
+    var clock = false
+    var clockCorner = ClockCorner.topRight
+
+    init() {}
+
+    /// Prefs saved by older versions are missing newer settings. Those get their
+    /// defaults instead of failing to load and resetting everything.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = Prefs()
+        volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? d.volume
+        muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? d.muted
+        lowLatency = try c.decodeIfPresent(Bool.self, forKey: .lowLatency) ?? d.lowLatency
+        replay = try c.decodeIfPresent(Bool.self, forKey: .replay) ?? d.replay
+        stats = try c.decodeIfPresent(Bool.self, forKey: .stats) ?? d.stats
+        micID = try c.decodeIfPresent(String.self, forKey: .micID) ?? d.micID
+        micLevel = try c.decodeIfPresent(Double.self, forKey: .micLevel) ?? d.micLevel
+        gameAudio = (try? c.decodeIfPresent([String: GameAudioChoice].self, forKey: .gameAudio)) ?? d.gameAudio
+        videoDevice = try c.decodeIfPresent(String.self, forKey: .videoDevice) ?? d.videoDevice
+        clock = try c.decodeIfPresent(Bool.self, forKey: .clock) ?? d.clock
+        clockCorner = (try? c.decodeIfPresent(ClockCorner.self, forKey: .clockCorner)) ?? d.clockCorner
+    }
 }
 
 // MARK: - Storage

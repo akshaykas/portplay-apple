@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var flash = 0.0
+    @State private var barHeight: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -40,6 +41,9 @@ struct ContentView: View {
 
             // Recording time and troubleshooting tips, top left
             VStack(alignment: .leading, spacing: 12) {
+                if model.clockShowing && model.prefs.clockCorner == .topLeft {
+                    ClockView()
+                }
                 if model.isRecording {
                     RecordingIndicator(live: model.live)
                 }
@@ -51,10 +55,28 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             // Stats, a small box in the top right like the Windows version
-            if model.prefs.stats {
-                HUDView(live: model.live)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            VStack(alignment: .trailing, spacing: 12) {
+                if model.clockShowing && model.prefs.clockCorner == .topRight {
+                    ClockView()
+                }
+                if model.prefs.stats {
+                    HUDView(live: model.live)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+
+            // Clock in a bottom corner, lifted above the control bar while it shows
+            if model.clockShowing && !model.prefs.clockCorner.isTop {
+                ClockView()
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, model.controlsVisible ? barHeight + 28 : 14)
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: model.prefs.clockCorner.isLeft ? .bottomLeading : .bottomTrailing
+                    )
+                    .animation(.easeOut(duration: 0.25), value: model.controlsVisible)
             }
 
             // Toasts above the control bar
@@ -63,6 +85,9 @@ struct ContentView: View {
                 ToastStack()
                 if model.controlsVisible {
                     ControlBar()
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(key: BarHeightKey.self, value: geo.size.height)
+                        })
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -98,6 +123,7 @@ struct ContentView: View {
             flash = 0.55
             withAnimation(.easeOut(duration: 0.45)) { flash = 0 }
         }
+        .onPreferenceChange(BarHeightKey.self) { barHeight = $0 }
         .task { await model.launch() }
         // portplay://open from the website just brings PortPlay to the front
         .onOpenURL { _ in model.wake() }
@@ -112,6 +138,13 @@ struct ContentView: View {
             #else
             .onTapGesture { model.tapStage() }
             #endif
+    }
+}
+
+private struct BarHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
@@ -132,6 +165,7 @@ struct KeyboardShortcuts: View {
                 key("m") { model.toggleMute() }
                 key("g") { model.setLowLatency(!model.prefs.lowLatency, announce: true) }
                 key("l") { model.setStats(!model.prefs.stats) }
+                key("k") { model.setClock(!model.prefs.clock, announce: true) }
                 key("p") { model.togglePiP() }
                 key("o") { model.toggleSettings() }
                 #if os(macOS)
